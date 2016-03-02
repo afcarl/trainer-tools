@@ -1,0 +1,23 @@
+#!/bin/sh
+
+
+docker run --rm -ti \
+    --name trainer \
+    -e AWS_ACCESS_KEY_ID \
+    -e AWS_SECRET_ACCESS_KEY \
+    -e AWS_SESSION_TOKEN \
+    -e AWS_DEFAULT_PROFILE \
+    -e AWS_DEFAULT_REGION \
+    -e AWS_CONFIG_FILE \
+    -e USER \
+    -e SSH_AUTH_SOCK \
+    -v $(dirname $SSH_AUTH_SOCK):$(dirname $SSH_AUTH_SOCK) \
+    -v `pwd`:/workdir \
+    -w /workdir \
+    soulshake/trainer "$@"
+# -e AWS_SECRET_ACCESS_KEY \
+#-e AWS_SECRET_KEY \
+#-e AWS_ACCESS_KEY_ID \
+#-e AWS_VPC_ID \
+#-e AWS_ACCESS_KEY \
+#-e AMAZON_REGION \

@@ -1,0 +1,126 @@
+#!/bin/bash
+
+set -e
+
+# To make the `trainer` script work, please
+# get your own credentials and set the environment variables below.
+#
+# export AWS_ACCESS_KEY_ID=AKIAJF746WG4HR6IGEXQ
+# export AWS_SECRET_ACCESS_KEY=AoXiWV+lCagS7xM9/svK8XfmmIGR26Napum86xAe
+
+if [ -z "$AWS_ACCESS_KEY_ID" ]
+then
+  echo "Please export AWS_ACCESS_KEY_ID environment variable."
+  exit 1
+fi
+
+if [ -z "$AWS_SECRET_ACCESS_KEY" ]
+then
+  echo "Please export AWS_SECRET_ACCESS_KEY environment variable."
+  exit 1
+fi
+
+if [ -z "$AWS_DEFAULT_REGION" ]
+then
+  echo "Please export AWS_DEFAULT_REGION environment variable."
+  exit 1
+fi
+
+# use find-ubuntu-ami script in `trainer-tools/`
+case $AWS_DEFAULT_REGION in
+eu-central-1)
+  AMI=ami-74a4bc18
+  ;;
+eu-west-1)
+  AMI=ami-cda312be
+  ;;
+us-west-2)
+  AMI=ami-495bbd29
+  ;;
+us-east-1)
+  AMI=ami-1711387d
+  ;;
+esac
+#export EC2_URL=https://ec2.$REGION.amazonaws.com/
+
+case "$1" in
+shell)
+  export PS1="trainctl@$REGION# "
+  exec $SHELL
+  ;;
+opensg)
+  ec2-authorize -P tcp -p -1 default
+  ec2-authorize -P udp -p -1 default
+  ec2-authorize -P icmp -t -1:-1 default
+  ;;
+aws)
+  "$@"
+  ;;
+start)
+  SHORT_FINGERPRINT=$(ssh-add -l | head -n 1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
+  AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
+  if ! aws ec2 describe-key-pairs --key-names $AWS_KEY_NAME; then
+    aws ec2 import-key-pair --key-name $AWS_KEY_NAME --public-key-material "$(ssh-add -L | head -n 1 | cut -d " " -f 1-2)"
+    # if exit code here, complain (and skip next bit)
+  fi
+  if ! aws ec2 describe-key-pairs --key-names $AWS_KEY_NAME; then
+    echo "Somehow, importing the key didn't work."
+    echo "Make sure that 'ssh-add -l | head -n 1' returns a RSA key?"
+    exit 1
+  fi
+  echo 'Itsa me, SSH.io!'
+  exit 0
+
+
+  if [ -z "$2" ]
+  then
+    echo "Indicate number of instances to start."
+    exit 1
+  fi
+  TOKEN=$(date +%Y-%m-%d-%H-%M-$USER)
+  # aws ec2 run-instances
+  ec2-run-instances \
+    --user-data-file cloudinit.sh \
+    --instance-count $2 \
+    --instance-type c3.large \
+    --client-token $TOKEN \
+    $AMI | grep ^RESERVATION
+  IDS=$(ec2-describe-instances --filter client-token=$TOKEN | grep ^INSTANCE | awk '{print $2}')
+  # aws ec2 create-tags
+  ec2-create-tags --tag Name=$TOKEN $IDS
+  for ID in $IDS
+  do
+    while ! ec2-describe-instances $ID | grep ^NICASSOCIATION
+    do
+      sleep 3
+    done
+  done
+  echo "Successfully created $2 instances with tag:"
+  echo "$TOKEN"
+  ;;
+ips)
+  if [ -z "$2" ]
+  then
+    echo "Please specify tag."
+    exit 1
+  fi
+  # aws ec2 describe-instances
+  aws ec2 describe-instances --filter tag:Name=$2 | grep ^NICASSOCIATION | awk '{print $2}'
+  ;;
+list)
+  aws ec2 describe-instances | grep ^TAG
+  ;;
+stop)
+  if [ -z "$2" ]
+  then
+    echo "Please specify tag."
+    exit 1
+  fi
+  ec2-describe-instances --filter tag:Name=$2 | grep ^INSTANCE | awk '{print $2}' | xargs ec2-terminate-instances
+  # aws ec2 terminate-instances
+  ;;
+*)
+  echo "$0 <start|stop|ips|list|opensg|shell> [n-instances|token...]"
+  ;;
+esac
+
