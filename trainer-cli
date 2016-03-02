@@ -1,49 +1,101 @@
 #!/bin/bash
 
-set -e
+set -e  # if we encounter an error, abort
+export TAG=testing-aj
 
 # To make the `trainer` script work, please
 # get your own credentials and set the environment variables below.
 #
 # export AWS_ACCESS_KEY_ID=AKIAJF746WG4HR6IGEXQ
 # export AWS_SECRET_ACCESS_KEY=AoXiWV+lCagS7xM9/svK8XfmmIGR26Napum86xAe
+# AWS_DEFAULT_OUTPUT
 
-if [ -z "$AWS_ACCESS_KEY_ID" ]
-then
-  echo "Please export AWS_ACCESS_KEY_ID environment variable."
-  exit 1
-fi
+die () {
+    echo "$1"
+    exit 1
+}
 
-if [ -z "$AWS_SECRET_ACCESS_KEY" ]
-then
-  echo "Please export AWS_SECRET_ACCESS_KEY environment variable."
-  exit 1
-fi
+greet() {
+    hello=$(aws iam get-user --output text | cut -f7)
+    echo "Greetings, $hello!"
+}
 
-if [ -z "$AWS_DEFAULT_REGION" ]
-then
-  echo "Please export AWS_DEFAULT_REGION environment variable."
-  exit 1
-fi
+sync_keys() {
+    # to test: 
+    # unset SSH_AUTH_SOCK
+    # eval $(ssh-agent) and run ssh-agent again
 
-# use find-ubuntu-ami script in `trainer-tools/`
-case $AWS_DEFAULT_REGION in
-eu-central-1)
-  AMI=ami-74a4bc18
-  ;;
-eu-west-1)
-  AMI=ami-cda312be
-  ;;
-us-west-2)
-  AMI=ami-495bbd29
-  ;;
-us-east-1)
-  AMI=ami-1711387d
-  ;;
-esac
-#export EC2_URL=https://ec2.$REGION.amazonaws.com/
+    # make sure ssh-add -l contains "RSA"
+    ssh-add -l | head -n1 | grep -q RSA || {
+        die "The output of \`ssh-add -l\` doesn't contain 'RSA'. Start the agent, add your keys?"
+        }
+
+    SHORT_FINGERPRINT=$(ssh-add -l | head -n 1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
+    AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
+    echo "Found local key with fingerprint $SHORT_FINGERPRINT."
+
+    echo "Checking for AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION..."
+    if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
+
+        echo "No AWS key named $AWS_KEY_NAME found. Running \`aws ec2 import-key-pair --keyname $AWS_KEY_NAME\`..."
+        aws ec2 import-key-pair --key-name $AWS_KEY_NAME --public-key-material "$(ssh-add -L | head -n 1 | cut -d " " -f 1-2)"
+    else
+        echo "Key pair imported with --key-name $AWS_KEY_NAME. Checking operation was successful..."
+    fi
+
+    if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
+        die "Somehow, importing the key didn't work. Make sure that 'ssh-add -l | head -n 1' returns an RSA key?"
+    else
+        echo "Found AWS key named $AWS_KEY_NAME. Proceeding with instance creation."
+    fi
+}
+
+check_envvars() {
+    # This script only works if the AWS CLI provides plain text output
+    export AWS_DEFAULT_OUTPUT=text
+
+    for envvar in {AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION}; do
+        if [ -z "$envvar" ]
+        then
+            die "Please export $envvar environment variable."
+        #else
+        #    echo "$envvar: ${!envvar}."
+        fi
+    done
+}
+
+get_ami() {
+    # use find-ubuntu-ami script in `trainer-tools/`
+    case $AWS_DEFAULT_REGION in
+    eu-central-1)
+      AMI=ami-74a4bc18
+      ;;
+    eu-west-1)
+      AMI=ami-cda312be
+      ;;
+    us-west-2)
+      AMI=ami-495bbd29
+      ;;
+    us-east-1)
+      AMI=ami-1711387d
+      ;;
+    esac
+}
+
+check_envvars
 
 case "$1" in
+ami)
+    shift
+    ./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION $*
+    echo
+    echo "Protip:"
+    echo "./trainer ami -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | cut -d\" \" -f15"
+    echo
+    suggested_ami=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
+    echo "Suggestions:"
+    echo "$suggested_ami"
+    ;;
 shell)
   export PS1="trainctl@$REGION# "
   exec $SHELL
@@ -56,68 +108,74 @@ opensg)
 aws)
   "$@"
   ;;
+env)
+  env
+  ;;
 start)
-  SHORT_FINGERPRINT=$(ssh-add -l | head -n 1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
-  AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
-  if ! aws ec2 describe-key-pairs --key-names $AWS_KEY_NAME; then
-    aws ec2 import-key-pair --key-name $AWS_KEY_NAME --public-key-material "$(ssh-add -L | head -n 1 | cut -d " " -f 1-2)"
-    # if exit code here, complain (and skip next bit)
-  fi
-  if ! aws ec2 describe-key-pairs --key-names $AWS_KEY_NAME; then
-    echo "Somehow, importing the key didn't work."
-    echo "Make sure that 'ssh-add -l | head -n 1' returns a RSA key?"
-    exit 1
-  fi
-  echo 'Itsa me, SSH.io!'
-  exit 0
+    greet
 
+    sync_keys
 
-  if [ -z "$2" ]
-  then
-    echo "Indicate number of instances to start."
-    exit 1
-  fi
-  TOKEN=$(date +%Y-%m-%d-%H-%M-$USER)
-  # aws ec2 run-instances
-  ec2-run-instances \
-    --user-data-file cloudinit.sh \
-    --instance-count $2 \
+    if [ -z "$2" ]
+    then
+        echo "Indicate number of instances to start."
+        exit 1
+    fi
+
+    if [ -z "$3" ]
+    then
+        TOKEN=$(date +%Y-%m-%d-%H-%M-$USER)
+    else
+        TOKEN=$3
+    fi
+
+    echo "Starting $2 instances:"
+    echo "Region: $AWS_DEFAULT_REGION"
+    echo "AMI: $AMI"
+    echo "Token: $TOKEN"
+    exit 0
+
+    aws ec2 run-instances \
+    --user-data cloudinit.sh \
+    --count $2 \
     --instance-type c3.large \
     --client-token $TOKEN \
-    $AMI | grep ^RESERVATION
-  IDS=$(ec2-describe-instances --filter client-token=$TOKEN | grep ^INSTANCE | awk '{print $2}')
-  # aws ec2 create-tags
-  ec2-create-tags --tag Name=$TOKEN $IDS
-  for ID in $IDS
-  do
-    while ! ec2-describe-instances $ID | grep ^NICASSOCIATION
+    --image-id $AMI # | grep ^RESERVATION
+
+    #IDS=$(aws ec2 describe-instances --filter client-token=$TOKEN | grep ^INSTANCE | awk '{print $2}')
+    IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$TAG" | grep ^INSTANCE | awk '{print $8}')
+
+    # aws ec2 create-tags --tag Key=Name,Value=purple --resources i-5ff67ce3
+    aws ec2 create-tags --tag Key=Name,Value=$TOKEN --resources $IDS
+    for ID in $IDS;
     do
-      sleep 3
+        while ! ec2-describe-instances --filters "Name=instance-id,Values=$ID" | grep ^ASSOCIATION
+        do
+            sleep 3
+        done
     done
-  done
-  echo "Successfully created $2 instances with tag:"
-  echo "$TOKEN"
-  ;;
+    echo "Successfully created $2 instances with tag: $TOKEN"
+    ;;
 ips)
-  if [ -z "$2" ]
-  then
-    echo "Please specify tag."
-    exit 1
-  fi
-  # aws ec2 describe-instances
-  aws ec2 describe-instances --filter tag:Name=$2 | grep ^NICASSOCIATION | awk '{print $2}'
-  ;;
+    if [ -z "$2" ]
+    then
+        echo "Please specify tag."
+        exit 1
+    fi
+    #aws ec2-describe-instances --filter tag:Name=$2 | grep ^NICASSOCIATION | awk '{print $2}'
+    aws ec2 describe-instances --filters "Name=tag:Name,Values=$2" | grep ^ASSOCIATION | awk '{print $4}'
+    ;;
 list)
-  aws ec2 describe-instances | grep ^TAG
-  ;;
+    aws ec2 describe-instances | grep ^TAG
+    ;;
 stop)
   if [ -z "$2" ]
   then
     echo "Please specify tag."
     exit 1
   fi
-  ec2-describe-instances --filter tag:Name=$2 | grep ^INSTANCE | awk '{print $2}' | xargs ec2-terminate-instances
-  # aws ec2 terminate-instances
+  #ec2-describe-instances --filter tag:Name=$2 | grep ^INSTANCE | awk '{print $2}' | xargs ec2-terminate-instances
+  aws ec2 describe-instances --filters "Name=tag:Name,Values=purple" | grep ^INSTANCES | awk '{print $8}' | xargs aws ec2 terminate-instances --dry-run --instance-ids
   ;;
 *)
   echo "$0 <start|stop|ips|list|opensg|shell> [n-instances|token...]"

@@ -4,11 +4,12 @@
 docker run --rm -ti \
     --name trainer \
     -e AWS_ACCESS_KEY_ID \
-    -e AWS_SECRET_ACCESS_KEY \
-    -e AWS_SESSION_TOKEN \
+    -e AWS_CONFIG_FILE \
     -e AWS_DEFAULT_PROFILE \
     -e AWS_DEFAULT_REGION \
-    -e AWS_CONFIG_FILE \
+    -e AWS_DEFAULT_OUTPUT \
+    -e AWS_SECRET_ACCESS_KEY \
+    -e AWS_SESSION_TOKEN \
     -e USER \
     -e SSH_AUTH_SOCK \
     -v $(dirname $SSH_AUTH_SOCK):$(dirname $SSH_AUTH_SOCK) \
