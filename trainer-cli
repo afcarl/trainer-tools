@@ -235,7 +235,19 @@ ips)
         --query "Reservations[*].Instances[*].PublicIpAddress"
     ;;
 list)
-    aws ec2 describe-instances | grep ^TAGS | sort --unique
+    aws ec2 describe-instances --output table \
+        --filter "Name=tag:Name,Values=$2" \
+        --query "Reservations[*].Instances[*].[ \
+            InstanceId, \
+            State.Name, \
+            Tags[0].Value, \
+            PublicIpAddress, \
+            InstanceType \
+            ]"
+    # With column headers, but can't specify column order
+    #aws ec2 describe-instances --output text \
+    #    --filter "Name=tag:Name,Values=2016-03-03-18-48-aj" \
+    #    --query "Reservations[*].Instances[*].{PublicIpAddress:PublicIpAddress,State:State}" 
     ;;
 tags)
     aws ec2 describe-instances | grep ^TAGS | sort --unique
