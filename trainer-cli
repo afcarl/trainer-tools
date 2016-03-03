@@ -1,7 +1,6 @@
 #!/bin/bash
 
 set -e  # if we encounter an error, abort
-export TAG=testing-aj
 
 # To make the `trainer` script work, please
 # get your own credentials and set the environment variables below.
@@ -18,6 +17,38 @@ die () {
 greet() {
     hello=$(aws iam get-user --output text | cut -f7)
     echo "Greetings, $hello!"
+}
+
+pssh () {
+    HOSTFILES="hosts ips.txt /tmp/hosts"
+
+    # zsh doesn't split words like bash does
+    # this shouldn't be necessary since we're in a container
+    #if [ `basename $0`='zsh' ]; then
+    #    setopt shwordsplit
+    #fi
+
+    for HOSTFILE in $HOSTFILES; do
+        [ -f $HOSTFILE ] && echo "Found hostfile! Using: $HOSTFILE" && break
+    done
+
+    [ -f $HOSTFILE ] || {
+        echo "No hostfile found (tried $HOSTFILES)"
+        return
+    }
+
+    parallel-ssh -h $HOSTFILE -l docker \
+    -O UserKnownHostsFile=/dev/null -O StrictHostKeyChecking=no \
+    -O ForwardAgent=yes \
+    "$@"
+}
+
+pcopykey () {
+    ssh-add -L | pssh --askpass --send-input \
+    "mkdir -p .ssh; tee .ssh/authorized_keys"
+
+    ssh-add -L | pssh --send-input \
+    "sudo mkdir -p /root/.ssh; sudo tee /root/.ssh/authorized_keys"
 }
 
 sync_keys() {
@@ -64,8 +95,19 @@ check_envvars() {
     done
 }
 
+suggest_amis(){
+    suggested_ami=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
+    echo "$suggested_ami"
+}
+
+get_token() {
+    TOKEN=$(date +%Y-%m-%d-%H-%M-$USER)
+    echo $TOKEN
+}
+
 get_ami() {
-    # use find-ubuntu-ami script in `trainer-tools/`
+    # using find-ubuntu-ami script in `trainer-tools/`:
+    #AMI=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | head -1 | awk '{print $7}')
     case $AWS_DEFAULT_REGION in
     eu-central-1)
       AMI=ami-74a4bc18
@@ -80,6 +122,18 @@ get_ami() {
       AMI=ami-1711387d
       ;;
     esac
+    echo $AMI
+}
+
+get_instance_ids_by_tag(){
+    IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$1" | grep ^INSTANCE | awk '{print $8}')
+    echo "$IDS"
+}
+
+get_instance_ids_by_client_token(){
+    IDS=$(aws ec2 describe-instances --filters "Name=client-token,Values=$1" | grep ^INSTANCES | awk '{print $8}'
+)
+    echo "$IDS"
 }
 
 check_envvars
@@ -92,9 +146,8 @@ ami)
     echo "Protip:"
     echo "./trainer ami -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | cut -d\" \" -f15"
     echo
-    suggested_ami=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
     echo "Suggestions:"
-    echo "$suggested_ami"
+    suggest_amis
     ;;
 shell)
   export PS1="trainctl@$REGION# "
@@ -112,9 +165,9 @@ env)
   env
   ;;
 start)
-    greet
-
+    greet # Print our AWS username, to ease the pain of credential-juggling
     sync_keys
+    AMI=$(get_ami)
 
     if [ -z "$2" ]
     then
@@ -122,63 +175,92 @@ start)
         exit 1
     fi
 
-    if [ -z "$3" ]
-    then
-        TOKEN=$(date +%Y-%m-%d-%H-%M-$USER)
-    else
-        TOKEN=$3
-    fi
+    # generate a timestamp token
+    TOKEN=$(get_token)
 
     echo "Starting $2 instances:"
-    echo "Region: $AWS_DEFAULT_REGION"
-    echo "AMI: $AMI"
-    echo "Token: $TOKEN"
-    exit 0
+    echo "  Region: $AWS_DEFAULT_REGION"
+    echo "  Tag: $TOKEN"
+    echo "  AMI: $AMI"
 
     aws ec2 run-instances \
     --user-data cloudinit.sh \
     --count $2 \
     --instance-type c3.large \
     --client-token $TOKEN \
-    --image-id $AMI # | grep ^RESERVATION
+    --image-id $AMI  | head -2  # Show the reservation number? and first line showing instance details
 
-    #IDS=$(aws ec2 describe-instances --filter client-token=$TOKEN | grep ^INSTANCE | awk '{print $2}')
-    IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$TAG" | grep ^INSTANCE | awk '{print $8}')
+    # if instance creation succeeded, we should have some IDs
+    IDS=$(get_instance_ids_by_client_token $TOKEN)
+    if [ -z "$IDS" ]; then
+        die "Instance creation failed."
+    else
+        echo "Instances created with client-token: $TOKEN"
+        echo "$IDS" | wc -l
+    fi
 
-    # aws ec2 create-tags --tag Key=Name,Value=purple --resources i-5ff67ce3
+    # Tag these new instances with a tag that is the same as the token
     aws ec2 create-tags --tag Key=Name,Value=$TOKEN --resources $IDS
     for ID in $IDS;
     do
-        while ! ec2-describe-instances --filters "Name=instance-id,Values=$ID" | grep ^ASSOCIATION
+        while ! aws ec2 describe-instances --filters "Name=instance-id,Values=$ID" | grep ^ASSOCIATION
         do
+            echo "...waiting for association..."
             sleep 3
         done
     done
     echo "Successfully created $2 instances with tag: $TOKEN"
     ;;
+ids)
+    if [ -z "$2" ]
+    then
+        die "Please specify a tag."
+    fi
+    TOKEN=$2
+    echo "Lookup by tag $TOKEN:"
+    IDS=$(get_instance_ids_by_tag $TOKEN)
+    echo "$IDS"
+    echo "Lookup by client token $TOKEN:"
+    IDS=$(get_instance_ids_by_client_token $TOKEN)
+    echo "$IDS"
+;;
 ips)
     if [ -z "$2" ]
     then
-        echo "Please specify tag."
-        exit 1
+        die "Please specify tag."
     fi
-    #aws ec2-describe-instances --filter tag:Name=$2 | grep ^NICASSOCIATION | awk '{print $2}'
-    aws ec2 describe-instances --filters "Name=tag:Name,Values=$2" | grep ^ASSOCIATION | awk '{print $4}'
+    TOKEN=$2
+    aws ec2 describe-instances --output text \
+        --filter "Name=tag:Name,Values=$TOKEN" \
+        --query "Reservations[*].Instances[*].PublicIpAddress"
     ;;
 list)
-    aws ec2 describe-instances | grep ^TAG
+    aws ec2 describe-instances | grep ^TAGS | sort --unique
+    ;;
+tags)
+    aws ec2 describe-instances | grep ^TAGS | sort --unique
+    ;;
+tokens)
+    aws ec2 describe-instances --output json | grep ClientToken
+    ;;
+deploy)
+    echo "NOT IMPLEMENTED"
     ;;
 stop)
   if [ -z "$2" ]
   then
-    echo "Please specify tag."
-    exit 1
+    die "Please specify tag."
   fi
+  TOKEN=$2
+  echo "Deleting all instances with tag $TOKEN."
+  exit
+
   #ec2-describe-instances --filter tag:Name=$2 | grep ^INSTANCE | awk '{print $2}' | xargs ec2-terminate-instances
-  aws ec2 describe-instances --filters "Name=tag:Name,Values=purple" | grep ^INSTANCES | awk '{print $8}' | xargs aws ec2 terminate-instances --dry-run --instance-ids
+
+  #aws ec2 describe-instances --filters "Name=tag:training,Values=$TOKEN" | grep ^INSTANCES | awk '{print $8}' | xargs aws ec2 terminate-instances --dry-run --instance-ids
   ;;
 *)
-  echo "$0 <start|stop|ips|list|opensg|shell> [n-instances|token...]"
+  echo "$0 <start|stop|ips|tags|opensg|shell> [n-instances|token...]"
   ;;
 esac
 
