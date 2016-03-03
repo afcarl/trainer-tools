@@ -232,7 +232,9 @@ ips)
     TOKEN=$2
     aws ec2 describe-instances --output text \
         --filter "Name=tag:Name,Values=$TOKEN" \
-        --query "Reservations[*].Instances[*].PublicIpAddress"
+        --query "Reservations[*].Instances[*].PublicIpAddress" \
+            | tr "\t" "\n" \
+            | sort -n -t . -k 1,1 -k 2,2 -k 3,3 -k 4,4  # sort IPs
     ;;
 list)
     aws ec2 describe-instances --output table \
