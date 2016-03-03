@@ -136,6 +136,12 @@ get_instance_ids_by_client_token(){
     echo "$IDS"
 }
 
+need_tag(){
+    if [ -z $1 ]; then
+        die "Please specify a tag."
+    fi
+}
+
 check_envvars
 
 case "$1" in
@@ -212,24 +218,21 @@ start)
     echo "Successfully created $2 instances with tag: $TOKEN"
     ;;
 ids)
-    if [ -z "$2" ]
-    then
-        die "Please specify a tag."
-    fi
     TOKEN=$2
+    need_tag $TOKEN
+
     echo "Lookup by tag $TOKEN:"
     IDS=$(get_instance_ids_by_tag $TOKEN)
     echo "$IDS"
+
+    # Just in case we managed to create instances but weren't able to tag them
     echo "Lookup by client token $TOKEN:"
     IDS=$(get_instance_ids_by_client_token $TOKEN)
     echo "$IDS"
 ;;
 ips)
-    if [ -z "$2" ]
-    then
-        die "Please specify tag."
-    fi
     TOKEN=$2
+    need_tag $TOKEN
     aws ec2 describe-instances --output text \
         --filter "Name=tag:Name,Values=$TOKEN" \
         --query "Reservations[*].Instances[*].PublicIpAddress" \
@@ -237,6 +240,11 @@ ips)
             | sort -n -t . -k 1,1 -k 2,2 -k 3,3 -k 4,4  # sort IPs
     ;;
 list)
+    TOKEN=$2
+    need_tag $TOKEN
+    echo "ID State Tags IP Type" \
+        | awk '{ printf "%-15s %-20s %-15s %-10s %-30s \n", \
+        $1, $2, $3, $4, $5}' # column -t -c 70
     aws ec2 describe-instances --output table \
         --filter "Name=tag:Name,Values=$2" \
         --query "Reservations[*].Instances[*].[ \
@@ -257,22 +265,15 @@ tags)
 tokens)
     aws ec2 describe-instances --output json | grep ClientToken
     ;;
-deploy)
-    echo "NOT IMPLEMENTED"
-    ;;
 stop)
-  if [ -z "$2" ]
-  then
-    die "Please specify tag."
-  fi
-  TOKEN=$2
-  echo "Deleting all instances with tag $TOKEN."
-  exit
+    TOKEN=$2
+    need_tag $TOKEN
+    echo "Deleting all instances with tag $TOKEN."
+    IDS=$(get_instance_ids_by_tag $TOKEN)
+    echo "$IDS"
+    echo "$IDS" | xargs aws ec2 terminate-instances --instance-ids
 
-  #ec2-describe-instances --filter tag:Name=$2 | grep ^INSTANCE | awk '{print $2}' | xargs ec2-terminate-instances
-
-  #aws ec2 describe-instances --filters "Name=tag:training,Values=$TOKEN" | grep ^INSTANCES | awk '{print $8}' | xargs aws ec2 terminate-instances --dry-run --instance-ids
-  ;;
+    ;;
 *)
   echo "$0 <start|stop|ips|tags|opensg|shell> [n-instances|token...]"
   ;;
