@@ -16,8 +16,10 @@ die () {
 
 greet() {
     hello=$(aws iam get-user --output text | cut -f7)
+    # JP: aws iam get-user --query 'User.UserName'
     echo "Greetings, $hello!"
 }
+
 
 pssh () {
     HOSTFILES="hosts ips.txt /tmp/hosts"
@@ -57,21 +59,25 @@ sync_keys() {
     # eval $(ssh-agent) and run ssh-agent again
 
     # make sure ssh-add -l contains "RSA"
-    ssh-add -l | head -n1 | grep -q RSA || {
+    ssh-add -l | head -n1 | grep -q RSA ||
         die "The output of \`ssh-add -l\` doesn't contain 'RSA'. Start the agent, add your keys?"
-        }
 
     SHORT_FINGERPRINT=$(ssh-add -l | head -n 1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
     AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
     echo "Found local key with fingerprint $SHORT_FINGERPRINT."
+    # JP: I think you can either say "found local key blah" or "looking for local key blah in region X" but putting both is redundant.
 
     echo "Checking for AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION..."
     if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
 
         echo "No AWS key named $AWS_KEY_NAME found. Running \`aws ec2 import-key-pair --keyname $AWS_KEY_NAME\`..."
+        # JP: Well you just displayed how it was named one line before. So idk if it's useful to restate it here.
+        # JP: Also, why display the command that you will execute, but *partially* ? What is the point? You could just say "Importing it." and that would be good enough, right?
+
         aws ec2 import-key-pair --key-name $AWS_KEY_NAME --public-key-material "$(ssh-add -L | head -n 1 | cut -d " " -f 1-2)"
     else
         echo "Key pair imported with --key-name $AWS_KEY_NAME. Checking operation was successful..."
+        # JP: this if/else is invalid. The echo should be right after import-key-pair and the verification below is redundant.
     fi
 
     if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
@@ -96,6 +102,7 @@ check_envvars() {
 }
 
 suggest_amis(){
+    # JP: horosho
     suggested_ami=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
     echo "$suggested_ami"
 }
@@ -189,8 +196,12 @@ start)
     echo "  Tag: $TOKEN"
     echo "  AMI: $AMI"
 
+    # JP: you had forgotten --key-name so we couldn't log into the instances.
+    # JP: also with AWS CLI, --user-data has to be file://cloudinit.sh
+    # JP: otherwise you pass the literal string "cloudinit.sh"
     aws ec2 run-instances \
     --user-data cloudinit.sh \
+    --key-name $AWS_KEY_NAME \
     --count $2 \
     --instance-type c3.large \
     --client-token $TOKEN \
@@ -213,6 +224,7 @@ start)
         do
             echo "...waiting for association..."
             sleep 3
+            # JP: we can get rid of that phase btw. (i.e. the whole waiting for ASSOCIATION thing)
         done
     done
     echo "Successfully created $2 instances with tag: $TOKEN"
@@ -238,6 +250,7 @@ ips)
         --query "Reservations[*].Instances[*].PublicIpAddress" \
             | tr "\t" "\n" \
             | sort -n -t . -k 1,1 -k 2,2 -k 3,3 -k 4,4  # sort IPs
+    # JP: try [PublicIpAddress] to simplify a tiny bit
     ;;
 list)
     TOKEN=$2
@@ -264,6 +277,7 @@ tags)
     ;;
 tokens)
     aws ec2 describe-instances --output json | grep ClientToken
+    # JP: aws ec2 describe-instances --output text --query 'Reservations[*].Instances[*].[ClientToken]' | sort -u
     ;;
 stop)
     TOKEN=$2
@@ -272,10 +286,11 @@ stop)
     IDS=$(get_instance_ids_by_tag $TOKEN)
     echo "$IDS"
     echo "$IDS" | xargs aws ec2 terminate-instances --instance-ids
+    # JP: xargs -r
 
     ;;
 *)
-  echo "$0 <start|stop|ips|tags|opensg|shell> [n-instances|token...]"
+  echo "$0 <start|stop|ips|tags|tokens|opensg|shell> [n-instances|token...]"
   ;;
 esac
 
