@@ -20,6 +20,19 @@ greet() {
     echo "Greetings, $hello!"
 }
 
+check_envvars() {
+    # This script only works if the AWS CLI provides plain text output
+    export AWS_DEFAULT_OUTPUT=text
+
+    for envvar in {AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION}; do
+        if [ -z "$envvar" ]
+        then
+            die "Please export $envvar environment variable."
+        #else
+        #    echo "$envvar: ${!envvar}."
+        fi
+    done
+}
 
 pssh () {
     HOSTFILES="hosts ips.txt /tmp/hosts"
@@ -63,46 +76,27 @@ sync_keys() {
         die "The output of \`ssh-add -l\` doesn't contain 'RSA'. Start the agent, add your keys?"
 
     SHORT_FINGERPRINT=$(ssh-add -l | head -n 1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
-    AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
-    echo "Found local key with fingerprint $SHORT_FINGERPRINT."
-    # JP: I think you can either say "found local key blah" or "looking for local key blah in region X" but putting both is redundant.
 
+    AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
     echo "Checking for AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION..."
     if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
-
-        echo "No AWS key named $AWS_KEY_NAME found. Running \`aws ec2 import-key-pair --keyname $AWS_KEY_NAME\`..."
-        # JP: Well you just displayed how it was named one line before. So idk if it's useful to restate it here.
-        # JP: Also, why display the command that you will execute, but *partially* ? What is the point? You could just say "Importing it." and that would be good enough, right?
-
-        aws ec2 import-key-pair --key-name $AWS_KEY_NAME --public-key-material "$(ssh-add -L | head -n 1 | cut -d " " -f 1-2)"
-    else
+        echo "No key found. Importing it."
+        aws ec2 import-key-pair --key-name $AWS_KEY_NAME \
+            --public-key-material "$(ssh-add -L \
+            | head -n 1 | cut -d " " -f 1-2)"
         echo "Key pair imported with --key-name $AWS_KEY_NAME. Checking operation was successful..."
-        # JP: this if/else is invalid. The echo should be right after import-key-pair and the verification below is redundant.
-    fi
 
-    if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
-        die "Somehow, importing the key didn't work. Make sure that 'ssh-add -l | head -n 1' returns an RSA key?"
-    else
-        echo "Found AWS key named $AWS_KEY_NAME. Proceeding with instance creation."
-    fi
-}
-
-check_envvars() {
-    # This script only works if the AWS CLI provides plain text output
-    export AWS_DEFAULT_OUTPUT=text
-
-    for envvar in {AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION}; do
-        if [ -z "$envvar" ]
-        then
-            die "Please export $envvar environment variable."
-        #else
-        #    echo "$envvar: ${!envvar}."
+        if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
+            die "Somehow, importing the key didn't work. Make sure that 'ssh-add -l | head -n 1' returns an RSA key?"
+        else
+            echo "Found AWS key named $AWS_KEY_NAME. Proceeding with instance creation."
         fi
-    done
+    else
+        echo "Found key $AWS_KEY_NAME."
+    fi
 }
 
 suggest_amis(){
-    # JP: horosho
     suggested_ami=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
     echo "$suggested_ami"
 }
@@ -115,6 +109,7 @@ get_token() {
 get_ami() {
     # using find-ubuntu-ami script in `trainer-tools/`:
     #AMI=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | head -1 | awk '{print $7}')
+    #AMI=$(suggest_amis | grep -v ^REGION | head -1 | awk '{print $7}')
     case $AWS_DEFAULT_REGION in
     eu-central-1)
       AMI=ami-74a4bc18
@@ -132,6 +127,18 @@ get_ami() {
     echo $AMI
 }
 
+get_instance_ips_by_tag(){
+    aws ec2 describe-instances \
+        --output text \
+        --filter "Name=tag:Name,Values=$1" \
+        --query "Reservations[*].Instances[*].PublicIpAddress" \
+            | tr "\t" "\n" \
+            | sort -n -t . -k 1,1 -k 2,2 -k 3,3 -k 4,4  # sort IPs
+    # JP: try [PublicIpAddress] to simplify a tiny bit
+        #--query [PublicIpAddress] \
+        # AJ: ? That doesn't work for me
+}
+
 get_instance_ids_by_tag(){
     IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$1" | grep ^INSTANCE | awk '{print $8}')
     echo "$IDS"
@@ -143,10 +150,47 @@ get_instance_ids_by_client_token(){
     echo "$IDS"
 }
 
+list_tags(){
+    #tags=$(aws ec2 describe-tags \
+    #    --filters "Name=key,Values=Name" \
+    #    --query 'Tags[*].Value[]' \
+    #    --output json)
+    tags=$(aws ec2 describe-instances \
+        --query 'Reservations[].Instances[].Tags[?Key==`Name`].Value[]')
+
+    echo "" > tags.txt
+    for t in $tags; do
+        echo "$t" >> tags.txt
+    done
+    cat tags.txt
+}
+
+print_tags(){
+    echo "Printing tags"
+    echo "# [Key] [Value]" | awk '{ printf " %6s %6s %15s \n", $1, $2, $3}'
+    aws ec2 describe-instances \
+        | grep ^TAGS \
+        | awk '{ printf " %-13s %-10s\n", $2, $3}' \
+        | sort \
+        | uniq -c
+}
+
 need_tag(){
-    if [ -z $1 ]; then
-        die "Please specify a tag."
+    TAG=$1
+    if [ -z "$TAG" ]; then
+        echo "Please specify a tag. Here's the list:"
+        die "$(print_tags)"
     fi
+
+    #all_tags=$(list_tags | uniq)
+    #valid_tag=$(cat tags.txt | grep "$TAG" -m 1)
+    #if [ -z $valid_tag ]; then
+    #    echo "$1 is not a valid tag. Here's the list:"
+    #    die "$all_tags"
+    #else
+    #    echo "$1 is a valid tag."
+    #    echo $valid_tag
+    #fi
 }
 
 check_envvars
@@ -191,16 +235,15 @@ start)
     # generate a timestamp token
     TOKEN=$(get_token)
 
+    echo "----------------------"
     echo "Starting $2 instances:"
     echo "  Region: $AWS_DEFAULT_REGION"
     echo "  Tag: $TOKEN"
     echo "  AMI: $AMI"
+    echo "----------------------"
 
-    # JP: you had forgotten --key-name so we couldn't log into the instances.
-    # JP: also with AWS CLI, --user-data has to be file://cloudinit.sh
-    # JP: otherwise you pass the literal string "cloudinit.sh"
     aws ec2 run-instances \
-    --user-data cloudinit.sh \
+    --user-data file://cloudinit.sh \
     --key-name $AWS_KEY_NAME \
     --count $2 \
     --instance-type c3.large \
@@ -212,22 +255,24 @@ start)
     if [ -z "$IDS" ]; then
         die "Instance creation failed."
     else
-        echo "Instances created with client-token: $TOKEN"
-        echo "$IDS" | wc -l
+        count=$(echo "$IDS" | wc -l)
+        echo "$count instances created with client-token: $TOKEN"
     fi
 
     # Tag these new instances with a tag that is the same as the token
     aws ec2 create-tags --tag Key=Name,Value=$TOKEN --resources $IDS
     for ID in $IDS;
     do
-        while ! aws ec2 describe-instances --filters "Name=instance-id,Values=$ID" | grep ^ASSOCIATION
+        while ! aws ec2 describe-instances --filters "Name=instance-id,Values=$ID" \
+            | grep ^ASSOCIATION \
+            | head -1
         do
-            echo "...waiting for association..."
             sleep 3
-            # JP: we can get rid of that phase btw. (i.e. the whole waiting for ASSOCIATION thing)
         done
     done
     echo "Successfully created $2 instances with tag: $TOKEN"
+    mkdir $TOKEN
+    get_instance_ips_by_tag $TOKEN > $TOKEN/ips.txt
     ;;
 ids)
     TOKEN=$2
@@ -241,16 +286,11 @@ ids)
     echo "Lookup by client token $TOKEN:"
     IDS=$(get_instance_ids_by_client_token $TOKEN)
     echo "$IDS"
-;;
+    ;;
 ips)
     TOKEN=$2
     need_tag $TOKEN
-    aws ec2 describe-instances --output text \
-        --filter "Name=tag:Name,Values=$TOKEN" \
-        --query "Reservations[*].Instances[*].PublicIpAddress" \
-            | tr "\t" "\n" \
-            | sort -n -t . -k 1,1 -k 2,2 -k 3,3 -k 4,4  # sort IPs
-    # JP: try [PublicIpAddress] to simplify a tiny bit
+    get_instance_ips_by_tag $TOKEN
     ;;
 list)
     TOKEN=$2
@@ -267,30 +307,38 @@ list)
             PublicIpAddress, \
             InstanceType \
             ]"
-    # With column headers, but can't specify column order
+    # With column headers (but can't specify column order):
     #aws ec2 describe-instances --output text \
     #    --filter "Name=tag:Name,Values=2016-03-03-18-48-aj" \
     #    --query "Reservations[*].Instances[*].{PublicIpAddress:PublicIpAddress,State:State}" 
     ;;
 tags)
-    aws ec2 describe-instances | grep ^TAGS | sort --unique
+    print_tags
     ;;
 tokens)
-    aws ec2 describe-instances --output json | grep ClientToken
-    # JP: aws ec2 describe-instances --output text --query 'Reservations[*].Instances[*].[ClientToken]' | sort -u
+    aws ec2 describe-instances --output text \
+            --query 'Reservations[*].Instances[*].[ClientToken]' \
+        | sort -u
     ;;
 stop)
     TOKEN=$2
     need_tag $TOKEN
-    echo "Deleting all instances with tag $TOKEN."
     IDS=$(get_instance_ids_by_tag $TOKEN)
     echo "$IDS"
-    echo "$IDS" | xargs aws ec2 terminate-instances --instance-ids
-    # JP: xargs -r
+    if [ -z "$IDS" ]; then
+        die "Invalid tag."
+    else
+        echo "Deleting instances with tag $TOKEN."
+    fi
 
+    echo "$IDS" | xargs -r aws ec2 terminate-instances --instance-ids \
+        | grep ^TERMINATINGINSTANCES
+
+    # append -stopped to the directory we created
+    mv $TOKEN $TOKEN-stopped
     ;;
 *)
-  echo "$0 <start|stop|ips|tags|tokens|opensg|shell> [n-instances|token...]"
-  ;;
+    echo "$0 <start|stop|ips|ids|tags|tokens|ami|aws|env|opensg|shell> [n-instances|token...]"
+    ;;
 esac
 
