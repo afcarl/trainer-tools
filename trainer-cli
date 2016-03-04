@@ -20,6 +20,42 @@ greet() {
     echo "Greetings, $hello!"
 }
 
+deploy_tag(){
+    TOKEN=$1
+    ips_file=$TOKEN/ips.txt
+    ln -sf $ips_file ips.txt
+    copy_keys $TOKEN
+    echo "Sourcing postprep.rc"
+    source rc
+    source postprep.rc
+}
+
+test_tag(){
+    ips_file=$TOKEN/ips.txt
+    echo "Finding random IP in $ips_file"
+    ip=$(shuf -n 1 $ips_file)
+    echo "Testing $ip"
+    test_vm $ip
+}
+
+test_vm() {
+    ip=$1
+    user=ubuntu
+    while ! ssh -o "StrictHostKeyChecking=no" $user@$ip "hostname"
+    do
+        echo "$ip is not ready yet"
+        sleep 3
+    done
+
+    ssh -q -o "StrictHostKeyChecking=no" $user@$ip "tail /tmp/pp.err"
+
+    for cmd in {"hostname","touch /tmp/pp.status","cat /tmp/pp.status","docker version","docker images","which pip","which fig","which docker-compose","cat /lib/systemd/system/docker.service | grep ExecStart","tail /tmp/pp.err"}; do
+        echo "=== $cmd ==="
+        ssh -o "StrictHostKeyChecking=no" docker@$ip $cmd
+    done
+    #  ssh -o "StrictHostKeyChecking=no" ubuntu@52.58.52.211 'tail /var/log/syslog'
+}
+
 check_envvars() {
     # This script only works if the AWS CLI provides plain text output
     export AWS_DEFAULT_OUTPUT=text
@@ -32,38 +68,6 @@ check_envvars() {
         #    echo "$envvar: ${!envvar}."
         fi
     done
-}
-
-pssh () {
-    HOSTFILES="hosts ips.txt /tmp/hosts"
-
-    # zsh doesn't split words like bash does
-    # this shouldn't be necessary since we're in a container
-    #if [ `basename $0`='zsh' ]; then
-    #    setopt shwordsplit
-    #fi
-
-    for HOSTFILE in $HOSTFILES; do
-        [ -f $HOSTFILE ] && echo "Found hostfile! Using: $HOSTFILE" && break
-    done
-
-    [ -f $HOSTFILE ] || {
-        echo "No hostfile found (tried $HOSTFILES)"
-        return
-    }
-
-    parallel-ssh -h $HOSTFILE -l docker \
-    -O UserKnownHostsFile=/dev/null -O StrictHostKeyChecking=no \
-    -O ForwardAgent=yes \
-    "$@"
-}
-
-pcopykey () {
-    ssh-add -L | pssh --askpass --send-input \
-    "mkdir -p .ssh; tee .ssh/authorized_keys"
-
-    ssh-add -L | pssh --send-input \
-    "sudo mkdir -p /root/.ssh; sudo tee /root/.ssh/authorized_keys"
 }
 
 sync_keys() {
@@ -94,6 +98,11 @@ sync_keys() {
     else
         echo "Found key $AWS_KEY_NAME."
     fi
+}
+
+copy_keys() {
+    source rc
+    pcopykey
 }
 
 suggest_amis(){
@@ -243,8 +252,8 @@ start)
     echo "----------------------"
 
     aws ec2 run-instances \
-    --user-data file://cloudinit.sh \
     --key-name $AWS_KEY_NAME \
+    --user-data file://cloudinit.sh \
     --count $2 \
     --instance-type c3.large \
     --client-token $TOKEN \
@@ -273,6 +282,8 @@ start)
     echo "Successfully created $2 instances with tag: $TOKEN"
     mkdir $TOKEN
     get_instance_ips_by_tag $TOKEN > $TOKEN/ips.txt
+    ln -sf $TOKEN/ips.txt ips.txt
+    #deploy_tag $TOKEN
     ;;
 ids)
     TOKEN=$2
@@ -335,10 +346,30 @@ stop)
         | grep ^TERMINATINGINSTANCES
 
     # append -stopped to the directory we created
+    rm ips.txt
     mv $TOKEN $TOKEN-stopped
     ;;
+deploy)
+    TOKEN=$2
+    need_tag $TOKEN
+    deploy_tag $TOKEN
+    test_tag $TOKEN
+    ;;
+test)
+    # pick a random IP and ssh to it
+    TOKEN=$2
+    need_tag $TOKEN
+    test_tag $TOKEN
+    ;;
+ssh)
+    user=docker
+    ip=$(tail -1 ips.txt)
+    shift
+    cmd=$*
+    ssh -q -o "StrictHostKeyChecking=no" $user@$ip "$cmd"
+    ;;
 *)
-    echo "$0 <start|stop|ips|ids|tags|tokens|ami|aws|env|opensg|shell> [n-instances|token...]"
+    echo "$0 <start|stop|deploy|ips|ids|tags|tokens|ami|aws|env|opensg|shell> [n-instances|token...]"
     ;;
 esac
 

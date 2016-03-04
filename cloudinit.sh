@@ -1,5 +1,6 @@
 #!/bin/sh
 
+
 # On EC2, the ephemeral disk might be mounted on /mnt.
 # If /mnt is a mountpoint, place Docker workspace on it.
 if mountpoint -q /mnt
@@ -15,8 +16,8 @@ if ! curl --silent --fail http://myip.enix.org/REMOTE_ADDR >/etc/hostname; then
 fi
 hostname $(cat /etc/hostname)
 
-# Fancy prompt courtesy of @soulshake.
-echo 'export PS1="\[\033[0;35m\]\u@\H \[\033[0;33m\]\w\[\033[0m\]: "' >> /etc/skel/.bashrc
+# Temporary prompt to show that we're not done cloudinit-ing yet.
+#update_status " [creating docker user]"
 
 # Create Docker user.
 useradd -d /home/docker -m -s /bin/bash docker
@@ -28,24 +29,27 @@ echo "docker ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/docker
 sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
 service ssh restart
 
+#update_status " [creating docker user]"
 apt-get -q update
 apt-get -qy install git jq python-pip
 
 # This will install the latest Docker.
+#update_status " [installing docker]"
 curl https://get.docker.com/ | sh
 
 # Make sure that the daemon listens on 55555 (for orchestration workshop).
-sed -i 's,-H fd://$,-H fd:// -H tcp://0.0.0.0:55555,' /lib/systemd/system/docker.service
-systemctl daemon-reload
+#sed -i 's,-H fd://$,-H fd:// -H tcp://0.0.0.0:55555,' /lib/systemd/system/docker.service
+#systemctl daemon-reload
 
 # There seems to be a bug in the systemd scripts; so work around it.
 # See https://github.com/docker/docker/issues/18444
-systemctl start docker || true
+#systemctl start docker || true
 
-pip install -U docker-compose
+#update_status " [installing compose]"
+#pip install -U docker-compose
 
-# Link so that older versions of the training still work properly
-ln -s /usr/local/bin/docker-compose /usr/local/bin/fig
+## Link so that older versions of the training still work properly
+#ln -s /usr/local/bin/docker-compose /usr/local/bin/fig
 
 # Wait for docker to be up.
 # If we don't do this, Docker will not be responsive during the next step.
@@ -55,12 +59,13 @@ do
 done
 
 # Pre-pull a bunch of images.
-for I in \
-	debian:latest ubuntu:latest fedora:latest centos:latest \
-	postgres redis training/namer nathanleclaire/redisonrails
+#for I in \
+#	debian:latest ubuntu:latest fedora:latest centos:latest \
+#	postgres redis training/namer nathanleclaire/redisonrails
 
-do
-	docker pull $I
-done
+#do
+#	docker pull $I
+#done
 
-
+# Fancy prompt courtesy of @soulshake.
+#update_status "DONE"

@@ -6,5 +6,6 @@ RUN apt-get install -y \
     ssh \
     curl \
     jq \
-    bsdmainutils
+    bsdmainutils \
+    pssh
 ENTRYPOINT ["./trainer-cli"]
