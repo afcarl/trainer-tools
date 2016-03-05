@@ -15,8 +15,8 @@ die () {
 }
 
 greet() {
-    hello=$(aws iam get-user --output text | cut -f7)
-    # JP: aws iam get-user --query 'User.UserName'
+    #hello=$(aws iam get-user --output text | cut -f7)
+    hello=$(aws iam get-user --query 'User.UserName')
     echo "Greetings, $hello!"
 }
 
@@ -24,9 +24,8 @@ deploy_tag(){
     TOKEN=$1
     ips_file=$TOKEN/ips.txt
     ln -sf $ips_file ips.txt
-    copy_keys $TOKEN
-    echo "Sourcing postprep.rc"
     source rc
+    echo "Sourcing postprep.rc..."
     source postprep.rc
 }
 
@@ -51,9 +50,8 @@ test_vm() {
 
     for cmd in {"hostname","touch /tmp/pp.status","cat /tmp/pp.status","docker version","docker images","which pip","which fig","which docker-compose","cat /lib/systemd/system/docker.service | grep ExecStart","tail /tmp/pp.err"}; do
         echo "=== $cmd ==="
-        ssh -o "StrictHostKeyChecking=no" docker@$ip $cmd
+        ssh -o "StrictHostKeyChecking=no" docker@$ip "$cmd"
     done
-    #  ssh -o "StrictHostKeyChecking=no" ubuntu@52.58.52.211 'tail /var/log/syslog'
 }
 
 check_envvars() {
@@ -64,8 +62,6 @@ check_envvars() {
         if [ -z "$envvar" ]
         then
             die "Please export $envvar environment variable."
-        #else
-        #    echo "$envvar: ${!envvar}."
         fi
     done
 }
@@ -80,7 +76,6 @@ sync_keys() {
         die "The output of \`ssh-add -l\` doesn't contain 'RSA'. Start the agent, add your keys?"
 
     SHORT_FINGERPRINT=$(ssh-add -l | head -n 1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
-
     AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
     echo "Checking for AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION..."
     if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
@@ -100,10 +95,6 @@ sync_keys() {
     fi
 }
 
-copy_keys() {
-    source rc
-    pcopykey
-}
 
 suggest_amis(){
     suggested_ami=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
@@ -191,16 +182,9 @@ need_tag(){
         die "$(print_tags)"
     fi
 
-    #all_tags=$(list_tags | uniq)
-    #valid_tag=$(cat tags.txt | grep "$TAG" -m 1)
-    #if [ -z $valid_tag ]; then
-    #    echo "$1 is not a valid tag. Here's the list:"
-    #    die "$all_tags"
-    #else
-    #    echo "$1 is a valid tag."
-    #    echo $valid_tag
-    #fi
+    # TODO: Tag validation?
 }
+
 
 check_envvars
 
@@ -280,10 +264,20 @@ start)
         done
     done
     echo "Successfully created $2 instances with tag: $TOKEN"
+
+    # create a directory for this tag, for its ips.txt (and maybe generated cards, someday)
     mkdir $TOKEN
     get_instance_ips_by_tag $TOKEN > $TOKEN/ips.txt
     ln -sf $TOKEN/ips.txt ips.txt
-    #deploy_tag $TOKEN
+
+    # wait until we can at least ping the host before even trying to deploy
+    # FIXME: need a reliable to way to tell when we can start to deploy
+    while ! ping -c 1 $(head -1 ips.txt)
+    do
+        sleep 3
+    done
+
+    deploy_tag $TOKEN
     ;;
 ids)
     TOKEN=$2
@@ -346,20 +340,13 @@ stop)
         | grep ^TERMINATINGINSTANCES
 
     # append -stopped to the directory we created
-    rm ips.txt
     mv $TOKEN $TOKEN-stopped
+    rm ips.txt
     ;;
 deploy)
     TOKEN=$2
     need_tag $TOKEN
     deploy_tag $TOKEN
-    test_tag $TOKEN
-    ;;
-test)
-    # pick a random IP and ssh to it
-    TOKEN=$2
-    need_tag $TOKEN
-    test_tag $TOKEN
     ;;
 ssh)
     user=docker
