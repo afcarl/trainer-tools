@@ -181,6 +181,7 @@ need_tag(){
         echo "Please specify a tag. Here's the list:"
         die "$(print_tags)"
     fi
+    echo $TAG
 
     # TODO: Tag validation?
 }
@@ -190,6 +191,7 @@ check_envvars
 
 case "$1" in
 ami)
+    # A wrapper for find-ubuntu-ami.sh
     shift
     ./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION $*
     echo
@@ -200,24 +202,25 @@ ami)
     suggest_amis
     ;;
 shell)
-  export PS1="trainctl@$REGION# "
-  exec $SHELL
-  ;;
+    # Get a shell in the container
+    export PS1="trainctl@$REGION# "
+    exec $SHELL
+    ;;
 opensg)
-  ec2-authorize -P tcp -p -1 default
-  ec2-authorize -P udp -p -1 default
-  ec2-authorize -P icmp -t -1:-1 default
-  ;;
+    # FIXME: What does this do?
+    ec2-authorize -P tcp -p -1 default
+    ec2-authorize -P udp -p -1 default
+    ec2-authorize -P icmp -t -1:-1 default
+    ;;
 aws)
-  "$@"
-  ;;
+    # Wrapper to run arbitrary AWS CLI commands in this container
+    "$@"
+    ;;
 env)
-  env
-  ;;
+    env  # Print this container's environment variables
+    ;;
 start)
-    greet # Print our AWS username, to ease the pain of credential-juggling
-    sync_keys
-    AMI=$(get_ami)
+    # Create $2 instances
 
     if [ -z "$2" ]
     then
@@ -225,8 +228,10 @@ start)
         exit 1
     fi
 
-    # generate a timestamp token
-    TOKEN=$(get_token)
+    greet       # Print our AWS username, to ease the pain of credential-juggling
+    sync_keys   # Ensure our SSH keys have been uploaded to AWS, to be added to each VM's authorized_keys
+    AMI=$(get_ami)  # Retrieve the AWS image ID
+    TOKEN=$(get_token)  # generate a timestamp token for this batch of VMs
 
     echo "----------------------"
     echo "Starting $2 instances:"
@@ -237,19 +242,16 @@ start)
 
     aws ec2 run-instances \
     --key-name $AWS_KEY_NAME \
-    --user-data file://cloudinit.sh \
     --count $2 \
     --instance-type c3.large \
     --client-token $TOKEN \
     --image-id $AMI  | head -2  # Show the reservation number? and first line showing instance details
+    #--user-data file://cloudinit.sh \
 
     # if instance creation succeeded, we should have some IDs
     IDS=$(get_instance_ids_by_client_token $TOKEN)
     if [ -z "$IDS" ]; then
         die "Instance creation failed."
-    else
-        count=$(echo "$IDS" | wc -l)
-        echo "$count instances created with client-token: $TOKEN"
     fi
 
     # Tag these new instances with a tag that is the same as the token
@@ -263,7 +265,9 @@ start)
             sleep 3
         done
     done
+    echo "[------------------------------------------------------------]"
     echo "Successfully created $2 instances with tag: $TOKEN"
+    echo "[------------------------------------------------------------]"
 
     # create a directory for this tag, for its ips.txt (and maybe generated cards, someday)
     mkdir $TOKEN
@@ -272,10 +276,7 @@ start)
 
     # wait until we can at least ping the host before even trying to deploy
     # FIXME: need a reliable to way to tell when we can start to deploy
-    while ! ping -c 1 $(head -1 ips.txt)
-    do
-        sleep 3
-    done
+    while ! ping -c 1 $(head -1 ips.txt); do sleep 3; done
 
     deploy_tag $TOKEN
     ;;
@@ -336,7 +337,8 @@ stop)
         echo "Deleting instances with tag $TOKEN."
     fi
 
-    echo "$IDS" | xargs -r aws ec2 terminate-instances --instance-ids \
+    echo "$IDS" \
+        | xargs -r aws ec2 terminate-instances --instance-ids \
         | grep ^TERMINATINGINSTANCES
 
     # append -stopped to the directory we created
@@ -344,9 +346,9 @@ stop)
     rm ips.txt
     ;;
 deploy)
-    TOKEN=$2
-    need_tag $TOKEN
+    TOKEN=$(need_tag $2)
     deploy_tag $TOKEN
+    echo "Finished deploying $TOKEN"
     ;;
 ssh)
     user=docker

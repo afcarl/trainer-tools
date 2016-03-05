@@ -8,11 +8,7 @@ import urllib
 
 def update_status(msg):
     #os.system("echo $PID '{}' >> /tmp/pp.status".format(msg))
-    os.system("echo      [{}] [{}] '{}'".format(
-        os.system("hostname"),
-        os.system("echo $PID"),
-        msg
-        ))
+    os.system("echo '{}'".format(msg))
 
 ### BEGIN CLOUDINIT
 
@@ -21,9 +17,16 @@ def update_status(msg):
 update_status("linking /mnt/docker to /var/lib/docker")
 os.system("if mountpoint -q /mnt; then sudo mkdir /mnt/docker && sudo ln -s /mnt/docker /var/lib/docker; fi")
 
-update_status("assigning our IP as our hostname")
-os.system("if ! curl --silent --fail http://myip.enix.org/REMOTE_ADDR | sudo tee /etc/hostname; then echo dockerhost | sudo tee /etc/hostname; fi")
-os.system("sudo hostname $(cat /etc/hostname)")
+# Set the hostname to be the public IP address of the instance.
+# If the call to myip fails, set a default hostname.
+#update_status("assigning our IP as our hostname")
+#os.system("if ! curl --silent --fail http://myip.enix.org/REMOTE_ADDR | sudo tee /etc/hostname; then echo dockerhost | sudo tee /etc/hostname; fi")
+#os.system("sudo hostname $(cat /etc/hostname)")
+#os.system("sudo service hostname start")
+
+# Fancy prompt courtesy of @soulshake.
+ps1 = '\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]: '
+os.system("echo 'export PS1={}\' | sudo tee -a /etc/skel/.bashrc".format(ps1))
 
 update_status("adding docker user")
 os.system("sudo useradd -d /home/docker -m -s /bin/bash docker")
