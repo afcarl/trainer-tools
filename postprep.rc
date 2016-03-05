@@ -6,79 +6,103 @@ import os
 import sys
 import urllib
 
-def update_status(msg):
-    #os.system("echo $PID '{}' >> /tmp/pp.status".format(msg))
-    os.system("echo '{}'".format(msg))
+STEP = 0
+
+def bold(msg):
+    return "{} {} {}".format("$(tput smso)", msg, "$(tput rmso)")
+
+def system(cmd):
+    global STEP
+    # can also use subprocess.check_call
+    # but have to pass an extra flag to do shell processing
+    with open("/tmp/pp.status", "a") as f:
+        f.write(bold("--- RUNNING [step {}] ---> {}...".format(STEP, cmd)))
+        retcode = os.system(cmd)
+        if retcode:
+            retcode = bold(retcode)
+        f.write("[{}]\n".format(retcode))
+        STEP += 1
+
+def test_system():
+    commands = [
+        "hostname",
+        "sudo ls -la /mnt/docker",
+        "which fig",
+        "sudo docker version",
+        "sudo curl --silent localhost:55555",
+        "sudo docker images",
+        "sudo docker ps",
+    ]
+    with open("/tmp/pp.status", "a") as f:
+        for cmd in commands:
+            retcode = os.system(cmd)
+            f.write("  ** [{}] --> {}\n".format(cmd, retcode))
+        
 
 ### BEGIN CLOUDINIT
+print("Welcome to postprep.rc!")
+begin=os.system("date")
+
+# Fancy prompt courtesy of @soulshake.
+system("sudo chmod 666 /etc/skel/.bashrc")
+system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]: '\" >> .bashrc")
+system("sudo chmod 666 /home/docker/.bashrc")
+system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]\n$ '\" >> /home/docker/.bashrc")
+system("sudo echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]\n$ '\" >> /etc/skel/.bashrc")
+# ps1 = '\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]: '
+# system("sudo echo \"PS1={}\" >> /etc/skel/.bashrc".format(ps1))
+# ps1 = '\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]: '
+# system("echo 'export PS1={}\' | sudo tee -a /etc/skel/.bashrc".format(ps1))
 
 # On EC2, the ephemeral disk might be mounted on /mnt.
 # If /mnt is a mountpoint, place Docker workspace on it.
-update_status("linking /mnt/docker to /var/lib/docker")
-os.system("if mountpoint -q /mnt; then sudo mkdir /mnt/docker && sudo ln -s /mnt/docker /var/lib/docker; fi")
+system("if mountpoint -q /mnt; then sudo mkdir /mnt/docker && sudo ln -s /mnt/docker /var/lib/docker; fi")
 
 # Set the hostname to be the public IP address of the instance.
 # If the call to myip fails, set a default hostname.
-#update_status("assigning our IP as our hostname")
-#os.system("if ! curl --silent --fail http://myip.enix.org/REMOTE_ADDR | sudo tee /etc/hostname; then echo dockerhost | sudo tee /etc/hostname; fi")
-#os.system("sudo hostname $(cat /etc/hostname)")
-#os.system("sudo service hostname start")
+# Actually, don't. Use the default hostname (ip-172-123-123-123)
 
-# Fancy prompt courtesy of @soulshake.
-ps1 = '\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]: '
-os.system("echo 'export PS1={}\' | sudo tee -a /etc/skel/.bashrc".format(ps1))
+# Add a docker user with password "training"
+system("sudo useradd -d /home/docker -m -s /bin/bash docker")
+system("echo docker:training | sudo chpasswd")
 
-update_status("adding docker user")
-os.system("sudo useradd -d /home/docker -m -s /bin/bash docker")
+# Copy authorized keys to /home/docker/.ssh/
+os.system("sudo mkdir -p /home/docker/.ssh")
+os.system("sudo cp /home/ubuntu/.ssh/authorized_keys /home/docker/.ssh/authorized_keys")
+os.system("sudo chown docker /home/docker/.ssh/authorized_keys")
 
-update_status("adding password 'training' for 'docker' user")
-os.system("echo docker:training | sudo chpasswd")
+# add docker user to sudoers and allow password authentication
+system("sudo bash -c \"echo 'docker ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/docker\"")
+system("sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config")
 
-#update_status("copying authorized keys to /home/docker/.ssh/")
-#os.system("sudo mkdir -p /home/docker/.ssh")
-#os.system("sudo cp /home/ubuntu/.ssh/authorized_keys /home/docker/.ssh/authorized_keys")
+system("sudo service ssh restart")
+system("sudo apt-get -q update")
+system("sudo apt-get -qy install git jq python-pip")
 
-update_status("adding docker user to sudoers")
-os.system("sudo bash -c \"echo 'docker ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/docker\"")
-
-update_status("allowing password authentication")
-os.system("sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config")
-
-update_status("restarting ssh")
-os.system("sudo service ssh restart")
-
-update_status("apt-get updating")
-os.system("sudo apt-get -q update")
-
-update_status("installing git jq python-pip")
-os.system("sudo apt-get -qy install git jq python-pip")
-
-update_status("installing docker")
 # This will install the latest Docker.
-os.system("curl https://get.docker.com/ | grep -v '( set -x; sleep 20 )' | sudo sh")
+system("curl --silent https://get.docker.com/ | grep -v '( set -x; sleep 20 )' | sudo sh")
 
 # Make sure that the daemon listens on 55555 (for orchestration workshop).
-os.system("sudo sed -i 's,-H fd://$,-H fd:// -H tcp://0.0.0.0:55555,' /lib/systemd/system/docker.service")
-os.system("sudo systemctl daemon-reload")
+# test if docker is listening on 55555: export DOCKER_HOST=tcp://localhost:55555 ; docker ps
+# can also curl localhost:55555 and it should tell you 404 not found. if it tells you connection refused, that's a bad sign
+system("sudo sed -i 's,-H fd://$,-H fd:// -H tcp://0.0.0.0:55555,' /lib/systemd/system/docker.service")
+system("sudo systemctl daemon-reload")
+# if docker is already running, need to do a restart
 
-update_status("starting docker")
 # There seems to be a bug in the systemd scripts; so work around it.
 # See https://github.com/docker/docker/issues/18444
-os.system("sudo systemctl start docker || true")
+system("sudo systemctl start docker || true")
+system("curl --silent localhost:55555 || sudo systemctl restart docker ")
 
-update_status("pip-installing docker-compose")
-os.system("sudo pip install -U docker-compose")
+system("sudo pip install -U docker-compose")
 
 # Link so that older versions of the training still work properly
-update_status("linking fig -> docker-compose")
-os.system("sudo ln -sf /usr/local/bin/docker-compose /usr/local/bin/fig")
+system("sudo ln -sf /usr/local/bin/docker-compose /usr/local/bin/fig")
 
 # Wait for docker to be up.
 # If we don't do this, Docker will not be responsive during the next step.
-update_status("waiting for docker to be installed")
-os.system("while ! sudo docker version ; do sleep 1; done")
+system("while ! sudo docker version ; do sleep 2; done")
 
-update_status("pulling images")
 for I in [
     "debian:latest",
     "ubuntu:latest",
@@ -89,9 +113,14 @@ for I in [
     "training/namer",
     "nathanleclaire/redisonrails"
     ]:
-    os.system("sudo docker pull {}".format(I))
+    system("sudo docker pull {}".format(I))
 
-update_status("end of cloudinit section of postprep")
+system("echo 'end of cloudinit section of postprep.rc'")
+
+test_system()
+
+system("echo 'tests complete.'")
+system("cat /tmp/pp.status")
 
 ### END CLOUDINIT
 
@@ -121,6 +150,11 @@ while addresses:
     if myaddr == cluster[0]:
         os.system("[ -f .ssh/id_rsa ] || ssh-keygen -t rsa -f .ssh/id_rsa -P ''")
 
+# in cloudinit, he was installing compose. here, he was installing a specific version. remove references to generic version
+# machine used to have a single binary, then we switched to multiple binaries for plugins, so it was distributed as a zip
+# then it went back to single, but he kept references just in case. can keep, but comment
+# before switching to systemd, this is how you would change the parameters for the docker daemon
+# he left it here because he heard we might want to homogenize stuff
 #os.system("sudo apt-get remove -y --purge dnsmasq-base")
 #os.system("sudo apt-get -qy install python-setuptools pssh apache2-utils httping htop unzip")
 #os.system("sudo easy_install pip")
@@ -137,14 +171,21 @@ while addresses:
 #os.system("echo 1000000 | sudo tee /proc/sys/net/nf_conntrack_max")
 ##os.system("""sudo sed -i 's,^DOCKER_OPTS=.*,DOCKER_OPTS="-H unix:///var/run/docker.sock -H tcp://0.0.0.0:55555",' /etc/default/docker""")
 ##os.system("sudo service docker restart")
+end = os.system("date")
+system("echo '{}' && echo '{}'".format(begin, end))
 EOF
 
-echo "feeding ips.txt to postprey.py" | tee -a /tmp/pp.status
-pssh -t 300 -I "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/pp.err" < ips.txt
+echo "Executing postprep.py..."
+pssh --timeout 300 --send-input "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/pp.err" < ips.txt
+retcode=$(echo $?)
+echo $retcode
+if [ $retcode -ne 0 ]; then
+    echo "Execution of postprep.py failed; exit code was $retcode"
+    ssh ubuntu@$(tail -1 ips.txt) "cat /tmp/pp.out"
+fi
 
-echo "if .ssh/id_rsa doesn't exist, scp-ing stuff" | tee -a /tmp/pp.status
+echo "Disabling StrictHostKeyChecking on node1." | tee -a /tmp/pp.status
 pssh "[ -f .ssh/id_rsa ] || scp -o StrictHostKeyChecking=no node1:.ssh/id_rsa* .ssh"
 
 echo "grepping for docker@ in .ssh/authorized_keys" | tee -a /tmp/pp.status
 pssh "grep docker@ .ssh/authorized_keys || cat .ssh/id_rsa.pub >> .ssh/authorized_keys"
-

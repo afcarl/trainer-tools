@@ -6,7 +6,7 @@ pssh () {
         return
     }
 
-    echo "* parallel-ssh-ing: $@"
+    echo "[parallel-ssh] $@"
 
     parallel-ssh -h $HOSTFILE -l ubuntu \
     -O UserKnownHostsFile=/dev/null -O StrictHostKeyChecking=no \

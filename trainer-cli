@@ -10,7 +10,7 @@ set -e  # if we encounter an error, abort
 # AWS_DEFAULT_OUTPUT
 
 die () {
-    echo "$1"
+    echo "$(tput setaf 1) $1 $(tput sgr0)"
     exit 1
 }
 
@@ -20,42 +20,64 @@ greet() {
     echo "Greetings, $hello!"
 }
 
+bold() {
+    msg=$1
+    echo "$(tput bold)$1$(tput sgr0)"
+}
+
+green() {
+    msg=$1
+    echo "$(tput setaf 2)$1$(tput sgr0)"
+}
+
+yellow(){
+    msg=$1
+    echo "$(tput setaf 3)$1$(tput sgr0)"
+}
+
 deploy_tag(){
     TOKEN=$1
     ips_file=$TOKEN/ips.txt
     ln -sf $ips_file ips.txt
+
+    # wait until we can at least run a simple command on the host via SSH before trying to deploy
+    echo -n "Waiting for initial contact... "
+    ip=$(tail -1 ips.txt)
+    ack="$ip reporting for duty."
+    tput setaf 7
+    while ! ssh -q -o "StrictHostKeyChecking=no" ubuntu@$ip "echo $ack"; do
+        echo -n "."
+        sleep 2
+    done
+    tput sgr0
+
+    yellow "[[ Deploying tag $(tput bold)$TOKEN ]]$(tput sgr0)"
     source rc
-    echo "Sourcing postprep.rc..."
     source postprep.rc
+    echo && tput setaf 2 && bold "Finished deploying $TOKEN" && tput sgr0 && echo
 }
 
 test_tag(){
     ips_file=$TOKEN/ips.txt
-    echo "Finding random IP in $ips_file"
+    yellow "Using random IP in $ips_file to run tests on $TOKEN"
     ip=$(shuf -n 1 $ips_file)
-    echo "Testing $ip"
     test_vm $ip
 }
 
 test_vm() {
     ip=$1
+    yellow "[[ Testing tag $(tput bold)$ip $(tput sgr0) ]]"
     user=ubuntu
-    while ! ssh -o "StrictHostKeyChecking=no" $user@$ip "hostname"
-    do
-        echo "$ip is not ready yet"
-        sleep 3
-    done
 
-    ssh -q -o "StrictHostKeyChecking=no" $user@$ip "tail /tmp/pp.err"
-
-    for cmd in {"hostname","touch /tmp/pp.status","cat /tmp/pp.status","docker version","docker images","which pip","which fig","which docker-compose","cat /lib/systemd/system/docker.service | grep ExecStart","tail /tmp/pp.err"}; do
+    for cmd in "hostname" 'echo "$PS1"' "docker version" "docker images" "which pip" "which fig" "which docker-compose" "curl --silent localhost:55555" "sudo ls -la /mnt/ | grep docker"; do
         echo "=== $cmd ==="
-        ssh -o "StrictHostKeyChecking=no" docker@$ip "$cmd"
+        ssh -A -q -o "UserKnownHostsFile /dev/null" -o "StrictHostKeyChecking=no" docker@$ip "$cmd"
+        echo
     done
 }
 
 check_envvars() {
-    # This script only works if the AWS CLI provides plain text output
+    # This script expects plain text output from the AWS CLI in some places
     export AWS_DEFAULT_OUTPUT=text
 
     for envvar in {AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION}; do
@@ -229,16 +251,18 @@ start)
     fi
 
     greet       # Print our AWS username, to ease the pain of credential-juggling
-    sync_keys   # Ensure our SSH keys have been uploaded to AWS, to be added to each VM's authorized_keys
+    sync_keys   # Upload our SSH keys to AWS if needed, to be added to each VM's authorized_keys
     AMI=$(get_ami)  # Retrieve the AWS image ID
     TOKEN=$(get_token)  # generate a timestamp token for this batch of VMs
 
+    tput bold && tput setaf 5
     echo "----------------------"
     echo "Starting $2 instances:"
     echo "  Region: $AWS_DEFAULT_REGION"
     echo "  Tag: $TOKEN"
     echo "  AMI: $AMI"
     echo "----------------------"
+    tput sgr0
 
     aws ec2 run-instances \
     --key-name $AWS_KEY_NAME \
@@ -265,19 +289,16 @@ start)
             sleep 3
         done
     done
-    echo "[------------------------------------------------------------]"
-    echo "Successfully created $2 instances with tag: $TOKEN"
-    echo "[------------------------------------------------------------]"
+
+    echo "[---------------------------------------------------------------------------------]"
+    echo " Successfully created $2 instances with tag: $TOKEN "
 
     # create a directory for this tag, for its ips.txt (and maybe generated cards, someday)
     mkdir $TOKEN
     get_instance_ips_by_tag $TOKEN > $TOKEN/ips.txt
     ln -sf $TOKEN/ips.txt ips.txt
-
-    # wait until we can at least ping the host before even trying to deploy
-    # FIXME: need a reliable to way to tell when we can start to deploy
-    while ! ping -c 1 $(head -1 ips.txt); do sleep 3; done
-
+    echo " IPs are located in $TOKEN/ips.txt and are symlinked in ./ips.txt."
+    echo "[---------------------------------------------------------------------------------]"
     deploy_tag $TOKEN
     ;;
 ids)
@@ -348,7 +369,12 @@ stop)
 deploy)
     TOKEN=$(need_tag $2)
     deploy_tag $TOKEN
-    echo "Finished deploying $TOKEN"
+    # test_tag $TOKEN
+    ;;
+test)
+    TOKEN=$(need_tag $2)
+    echo "Testing $TOKEN."
+    test_tag $TOKEN
     ;;
 ssh)
     user=docker
