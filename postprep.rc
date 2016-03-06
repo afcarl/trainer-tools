@@ -77,9 +77,10 @@ system("sudo useradd -d /home/docker -m -s /bin/bash docker")
 system("echo docker:training | sudo chpasswd")
 
 # Copy authorized keys to /home/docker/.ssh/
-os.system("sudo mkdir -p /home/docker/.ssh")
-os.system("sudo cp /home/ubuntu/.ssh/authorized_keys /home/docker/.ssh/authorized_keys")
-os.system("sudo chown docker /home/docker/.ssh/authorized_keys")
+#os.system("sudo mkdir -p /home/docker/.ssh")
+#os.system("sudo cp /home/ubuntu/.ssh/authorized_keys /home/docker/.ssh/authorized_keys")
+#os.system("sudo chown docker /home/docker/.ssh")
+#os.system("sudo chown docker /home/docker/.ssh/authorized_keys")
 
 # add docker user to sudoers and allow password authentication
 system("sudo bash -c \"echo 'docker ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/docker\"")
@@ -193,7 +194,7 @@ system("echo '{}' && echo '{}'".format(begin, end))
 EOF
 
 echo "Executing postprep.py..."
-pssh --timeout 300 --send-input "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/pp.err" < ips.txt
+pssh --timeout 600 --send-input "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/pp.err" < ips.txt
 retcode=$(echo $?)
 echo $retcode
 if [ $retcode -ne 0 ]; then
