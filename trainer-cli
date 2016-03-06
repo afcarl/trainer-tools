@@ -69,6 +69,8 @@ test_vm() {
     ip=$1
     yellow "[[ Testing instance with IP $(tput bold)$ip $(tput sgr0) ]]"
     user=ubuntu
+    # do it as ubuntu user 
+    # sudo -u docker "docker ps"
 
     for cmd in "hostname" "docker version" "docker-compose version" "docker-machine version" "docker images" "docker ps" "which fig" "curl --silent localhost:55555" "sudo ls -la /mnt/ | grep docker"; do
         echo "=== $cmd ==="
@@ -189,11 +191,12 @@ list_tags(){
 }
 
 print_tags(){
-    echo "Printing tags"
-    echo "# [Key] [Value]" | awk '{ printf " %6s %6s %15s \n", $1, $2, $3}'
+    # Print all "Name" tags in our region with their instance count
+    echo "[#] [Tag]" | awk '{ printf " %7s %12s \n", $1, $2}'
     aws ec2 describe-instances \
-        | grep ^TAGS \
-        | awk '{ printf " %-13s %-10s\n", $2, $3}' \
+        --filter "Name=tag:Name,Values=[*]" \
+        --query "Reservations[*].Instances[*].[Tags[0].Value]" \
+        | awk '{ printf " %-13s %-10s\n", $1, $2}' \
         | sort \
         | uniq -c
 }
@@ -326,6 +329,8 @@ ips)
     get_instance_ips_by_tag $TOKEN
     ;;
 list)
+    # list existing instances in a given batch
+    # to list batches, see "tags" command
     TOKEN=$2
     need_tag $TOKEN
     echo "ID State Tags IP Type" \
