@@ -41,9 +41,10 @@ deploy_tag(){
     ln -sf $ips_file ips.txt
 
     # wait until we can at least run a simple command on the host via SSH before trying to deploy
-    echo -n "Waiting for initial contact... "
+    echo -n "Waiting for initial contact..."
     ip=$(tail -1 ips.txt)
-    ack="$ip reporting for duty."
+    ack=" $ip reporting for duty."
+
     tput setaf 7
     while ! ssh -q -o "StrictHostKeyChecking=no" ubuntu@$ip "echo $ack"; do
         echo -n "."
@@ -54,7 +55,7 @@ deploy_tag(){
     yellow "[[ Deploying tag $(tput bold)$TOKEN ]]$(tput sgr0)"
     source rc
     source postprep.rc
-    echo && tput setaf 2 && bold "Finished deploying $TOKEN" && tput sgr0 && echo
+    echo && tput setaf 2 && bold "Finished deploying $TOKEN" && tput sgr0
 }
 
 test_tag(){
@@ -66,10 +67,10 @@ test_tag(){
 
 test_vm() {
     ip=$1
-    yellow "[[ Testing tag $(tput bold)$ip $(tput sgr0) ]]"
+    yellow "[[ Testing instance with IP $(tput bold)$ip $(tput sgr0) ]]"
     user=ubuntu
 
-    for cmd in "hostname" 'echo "$PS1"' "docker version" "docker images" "which pip" "which fig" "which docker-compose" "curl --silent localhost:55555" "sudo ls -la /mnt/ | grep docker"; do
+    for cmd in "hostname" "docker version" "docker-compose version" "docker-machine version" "docker images" "docker ps" "which fig" "curl --silent localhost:55555" "sudo ls -la /mnt/ | grep docker"; do
         echo "=== $cmd ==="
         ssh -A -q -o "UserKnownHostsFile /dev/null" -o "StrictHostKeyChecking=no" docker@$ip "$cmd"
         echo
@@ -290,6 +291,7 @@ start)
         done
     done
 
+    tput setaf 2
     echo "[---------------------------------------------------------------------------------]"
     echo " Successfully created $2 instances with tag: $TOKEN "
 
@@ -299,7 +301,11 @@ start)
     ln -sf $TOKEN/ips.txt ips.txt
     echo " IPs are located in $TOKEN/ips.txt and are symlinked in ./ips.txt."
     echo "[---------------------------------------------------------------------------------]"
+    tput sgr0
+
     deploy_tag $TOKEN
+    echo "You may want to test by running the following command:"
+    echo "./trainer test $TOKEN"
     ;;
 ids)
     TOKEN=$2

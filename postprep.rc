@@ -1,7 +1,17 @@
 pssh -I tee /tmp/postprep.py <<EOF
 #!/usr/bin/env python
-# this will be run as ubuntu user
-# it's fine until we get to docker ps or whatever, we'll have to use sudo because the ubuntu user has no access to the docker socket
+
+#################################
+
+COMPOSE_VERSION = "1.6.2"
+MACHINE_VERSION = "0.6.0"
+SWARM_VERSION = "1.1.3-rc1"
+
+#################################
+
+# This script will be run as ubuntu user.
+# it's fine until we get to docker ps or whatever, we'll have to use sudo because the ubuntu user has no access to the docker socket.
+
 import os
 import sys
 import urllib
@@ -79,30 +89,60 @@ system("sudo service ssh restart")
 system("sudo apt-get -q update")
 system("sudo apt-get -qy install git jq python-pip")
 
+# before switching to systemd, this is how you would change the parameters for the docker daemon
+# he left it here because he heard we might want to homogenize stuff
+#os.system("sudo apt-get remove -y --purge dnsmasq-base")
+#os.system("sudo apt-get -qy install python-setuptools pssh apache2-utils httping htop unzip")
+#os.system("sudo easy_install pip")
+
+# increase the size of the conntrack table so we don't blow it up when going crazy with http load testing
+os.system("echo 1000000 | sudo tee /proc/sys/net/nf_conntrack_max")
+
+
+### DOCKER INSTALLS ###
+
 # This will install the latest Docker.
 system("curl --silent https://get.docker.com/ | grep -v '( set -x; sleep 20 )' | sudo sh")
 
 # Make sure that the daemon listens on 55555 (for orchestration workshop).
-# test if docker is listening on 55555: export DOCKER_HOST=tcp://localhost:55555 ; docker ps
-# can also curl localhost:55555 and it should tell you 404 not found. if it tells you connection refused, that's a bad sign
+# To test, run: export DOCKER_HOST=tcp://localhost:55555 ; docker ps
+# or, run "curl localhost:55555" (it should return 404 not found). If it tells you connection refused, that's a bad sign
 system("sudo sed -i 's,-H fd://$,-H fd:// -H tcp://0.0.0.0:55555,' /lib/systemd/system/docker.service")
 system("sudo systemctl daemon-reload")
-# if docker is already running, need to do a restart
 
 # There seems to be a bug in the systemd scripts; so work around it.
 # See https://github.com/docker/docker/issues/18444
+# if docker is already running, need to do a restart
+system("curl --silent localhost:55555 || sudo systemctl restart docker ")  # does this work? if not, next line should cover it
 system("sudo systemctl start docker || true")
-system("curl --silent localhost:55555 || sudo systemctl restart docker ")
 
-system("sudo pip install -U docker-compose")
+### Install docker-compose
+# we'll use pip because interrupt signals are broken in the single binary version of 1.6.whatever-rc
+system("sudo pip install -U docker-compose=={}".format(COMPOSE_VERSION))
+#os.system("sudo pip uninstall -y docker-compose")
+#os.system("sudo curl -sSL -o /usr/local/bin/docker-compose https://github.com/docker/compose/releases/download/{}/docker-compose-$(uname -s)-$(uname -m)".format(COMPOSE_VERSION))
+#os.system("sudo chmod +x /usr/local/bin/docker-compose")
 
 # Link so that older versions of the training still work properly
 system("sudo ln -sf /usr/local/bin/docker-compose /usr/local/bin/fig")
+
+### Install docker-machine
+# docker-machine used to have a single binary, then they switched to multiple binaries for plugins, so it was distributed as a zip.
+# Then it went back to single. Keeping commented references below just in case.
+## os.system("sudo curl -sSL https://github.com/docker/machine/releases/download/v{}/docker-machine_linux-amd64.zip -o /tmp/docker-machine.zip".format(MACHINE_VERSION))
+## os.system("cd /usr/local/bin ; sudo unzip /tmp/docker-machine.zip")
+os.system("sudo curl -sSL -o /usr/local/bin/docker-machine https://github.com/docker/machine/releases/download/v{}/docker-machine-$(uname -s)-$(uname -m)".format(MACHINE_VERSION))
+os.system("sudo chmod +x /usr/local/bin/docker-machine*")
 
 # Wait for docker to be up.
 # If we don't do this, Docker will not be responsive during the next step.
 system("while ! sudo docker version ; do sleep 2; done")
 
+### Install Swarm
+os.system("docker pull swarm:{}".format(SWARM_VERSION))
+os.system("docker tag -f swarm:{} swarm".format(SWARM_VERSION))
+
+# Pre-pull a bunch of images
 for I in [
     "debian:latest",
     "ubuntu:latest",
@@ -124,9 +164,7 @@ system("cat /tmp/pp.status")
 
 ### END CLOUDINIT
 
-COMPOSE_VERSION = "1.6.2"
-MACHINE_VERSION = "0.6.0"
-SWARM_VERSION = "1.1.3-rc1"
+### BEGIN CLUSTERING ###
 
 clustersize = 5
 
@@ -150,27 +188,6 @@ while addresses:
     if myaddr == cluster[0]:
         os.system("[ -f .ssh/id_rsa ] || ssh-keygen -t rsa -f .ssh/id_rsa -P ''")
 
-# in cloudinit, he was installing compose. here, he was installing a specific version. remove references to generic version
-# machine used to have a single binary, then we switched to multiple binaries for plugins, so it was distributed as a zip
-# then it went back to single, but he kept references just in case. can keep, but comment
-# before switching to systemd, this is how you would change the parameters for the docker daemon
-# he left it here because he heard we might want to homogenize stuff
-#os.system("sudo apt-get remove -y --purge dnsmasq-base")
-#os.system("sudo apt-get -qy install python-setuptools pssh apache2-utils httping htop unzip")
-#os.system("sudo easy_install pip")
-#os.system("sudo pip uninstall -y docker-compose")
-##os.system("sudo pip install docker-compose=={}".format(COMPOSE_VERSION))
-#os.system("sudo curl -sSL -o /usr/local/bin/docker-compose https://github.com/docker/compose/releases/download/{}/docker-compose-$(uname -s)-$(uname -m)".format(COMPOSE_VERSION))
-#os.system("sudo chmod +x /usr/local/bin/docker-compose")
-#os.system("docker pull swarm:{}".format(SWARM_VERSION))
-#os.system("docker tag -f swarm:{} swarm".format(SWARM_VERSION))
-##os.system("sudo curl -sSL https://github.com/docker/machine/releases/download/v{}/docker-machine_linux-amd64.zip -o /tmp/docker-machine.zip".format(MACHINE_VERSION))
-##os.system("cd /usr/local/bin ; sudo unzip /tmp/docker-machine.zip")
-#os.system("sudo curl -sSL -o /usr/local/bin/docker-machine https://github.com/docker/machine/releases/download/v{}/docker-machine-$(uname -s)-$(uname -m)".format(MACHINE_VERSION))
-#os.system("sudo chmod +x /usr/local/bin/docker-machine*")
-#os.system("echo 1000000 | sudo tee /proc/sys/net/nf_conntrack_max")
-##os.system("""sudo sed -i 's,^DOCKER_OPTS=.*,DOCKER_OPTS="-H unix:///var/run/docker.sock -H tcp://0.0.0.0:55555",' /etc/default/docker""")
-##os.system("sudo service docker restart")
 end = os.system("date")
 system("echo '{}' && echo '{}'".format(begin, end))
 EOF
