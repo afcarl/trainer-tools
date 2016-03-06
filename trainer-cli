@@ -334,7 +334,7 @@ list)
     TOKEN=$2
     need_tag $TOKEN
     echo "ID State Tags IP Type" \
-        | awk '{ printf "%-15s %-20s %-15s %-10s %-30s \n", \
+        | awk '{ printf "%9s %12s %15s %20s %15s \n", \
         $1, $2, $3, $4, $5}' # column -t -c 70
     aws ec2 describe-instances --output table \
         --filter "Name=tag:Name,Values=$2" \
