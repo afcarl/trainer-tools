@@ -97,21 +97,23 @@ sync_keys() {
     # eval $(ssh-agent) and run ssh-agent again
 
     # make sure ssh-add -l contains "RSA"
-    ssh-add -l | head -n1 | grep -q RSA ||
+    ssh-add -l | grep -q RSA | head -n1 ||
         die "The output of \`ssh-add -l\` doesn't contain 'RSA'. Start the agent, add your keys?"
 
-    SHORT_FINGERPRINT=$(ssh-add -l | head -n 1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
+    SHORT_FINGERPRINT=$(ssh-add -l | grep -q RSA | head -n1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
     AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
     echo "Checking for AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION..."
     if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
         echo "No key found. Importing it."
         aws ec2 import-key-pair --key-name $AWS_KEY_NAME \
             --public-key-material "$(ssh-add -L \
-            | head -n 1 | cut -d " " -f 1-2)"
+                                    | grep -q RSA \
+                                    | head -n1 \
+                                    | cut -d " " -f 1-2)"
         echo "Key pair imported with --key-name $AWS_KEY_NAME. Checking operation was successful..."
 
         if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
-            die "Somehow, importing the key didn't work. Make sure that 'ssh-add -l | head -n 1' returns an RSA key?"
+            die "Somehow, importing the key didn't work. Make sure that 'ssh-add -l | grep RSA | head -n1' returns an RSA key?"
         else
             echo "Found AWS key named $AWS_KEY_NAME. Proceeding with instance creation."
         fi
