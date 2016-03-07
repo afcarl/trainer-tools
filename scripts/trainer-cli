@@ -1,13 +1,13 @@
 #!/bin/bash
-
-set -e  # if we encounter an error, abort
-
+# Don't execute this script directly. Use ../trainer instead.
 # To make the `trainer` script work, please
 # get your own credentials and set the environment variables below.
 #
 # export AWS_ACCESS_KEY_ID=AKIAJF746WG4HR6IGEXQ
 # export AWS_SECRET_ACCESS_KEY=AoXiWV+lCagS7xM9/svK8XfmmIGR26Napum86xAe
 # AWS_DEFAULT_OUTPUT
+
+set -e  # if we encounter an error, abort
 
 die () {
     echo "$(tput setaf 1) $1 $(tput sgr0)"
@@ -37,13 +37,14 @@ yellow(){
 
 deploy_tag(){
     TOKEN=$1
+    need_tag $TOKEN
     ips_file=tags/$TOKEN/ips.txt
     ln -sf $ips_file ips.txt
 
     # wait until we can at least run a simple command on the host via SSH before trying to deploy
     echo -n "Waiting for initial contact."
     ip=$(tail -1 ips.txt)
-    ack=" $ip reporting for duty."
+    ack="\ $ip reporting for duty."
 
     tput setaf 7
     while ! ssh -q -o "StrictHostKeyChecking=no" ubuntu@$ip "echo $ack"; do
@@ -53,8 +54,8 @@ deploy_tag(){
     tput sgr0
 
     yellow "[[ Deploying tag $(tput bold)$TOKEN ]]$(tput sgr0)"
-    source rc
-    source postprep.rc
+    source scripts/rc
+    source scripts/postprep.rc
     echo && tput setaf 2 && bold "Finished deploying $TOKEN" && tput sgr0
 }
 
@@ -63,6 +64,9 @@ test_tag(){
     yellow "Using random IP in $ips_file to run tests on $TOKEN"
     ip=$(shuf -n 1 $ips_file)
     test_vm $ip
+    echo "Tests complete. You may want to run one of the following commands:"
+    echo "trainer stop $TOKEN"
+    echo "trainer cards $TOKEN"
 }
 
 test_vm() {
@@ -72,7 +76,7 @@ test_vm() {
     # do it as ubuntu user 
     # sudo -u docker "docker ps"
 
-    for cmd in "hostname" "hostname -i" "docker version" "docker-compose version" "docker-machine version" "docker images" "docker ps" "which fig" "curl --silent localhost:55555" "sudo ls -la /mnt/ | grep docker" "env" "whoami" "ls -la"; do
+    for cmd in "hostname" "hostname -i" "cat /etc/hosts" "hostnamectl status" "docker version" "docker-compose version" "docker-machine version" "docker images" "docker ps" "which fig" "curl --silent localhost:55555" "sudo ls -la /mnt/ | grep docker" "env" "whoami" "ls -la"; do
         echo "=== $cmd ==="
         ssh -A -q \
             -o "UserKnownHostsFile /dev/null" \
@@ -100,7 +104,7 @@ sync_keys() {
     # eval $(ssh-agent) and run ssh-agent again
 
     # make sure ssh-add -l contains "RSA"
-    ssh-add -l | grep -q RSA | head -n1 ||
+    ssh-add -l | grep -q RSA ||
         die "The output of \`ssh-add -l\` doesn't contain 'RSA'. Start the agent, add your keys?"
 
     SHORT_FINGERPRINT=$(ssh-add -l | grep RSA | head -n1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
@@ -108,12 +112,13 @@ sync_keys() {
     #echo "Checking for AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION..."
     echo "Syncing keys."
     if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME >> /dev/null; then
+        # FIXME: "A client error ..." still prints here. It shouldn't.
         echo "No key named $AWS_KEY_NAME found in region $AWS_DEFAULT_REGION. Importing it."
         aws ec2 import-key-pair --key-name $AWS_KEY_NAME \
             --public-key-material "$(ssh-add -L \
                                     | grep -i RSA \
                                     | head -n1 \
-                                    | cut -d " " -f 1-2)"
+                                    | cut -d " " -f 1-2)" >> /dev/null
         echo "Key pair imported with --key-name $AWS_KEY_NAME. Checking operation was successful..."
 
         if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
@@ -127,7 +132,7 @@ sync_keys() {
 }
 
 suggest_amis(){
-    suggested_ami=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
+    suggested_ami=$(./scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
     echo "$suggested_ami"
 }
 
@@ -137,8 +142,8 @@ get_token() {
 }
 
 get_ami() {
-    # using find-ubuntu-ami script in `trainer-tools/`:
-    #AMI=$(./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | head -1 | awk '{print $7}')
+    # using find-ubuntu-ami script in `trainer-tools/scripts`:
+    #AMI=$(./scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | head -1 | awk '{print $7}')
     #AMI=$(suggest_amis | grep -v ^REGION | head -1 | awk '{print $7}')
     case $AWS_DEFAULT_REGION in
     eu-central-1)
@@ -209,8 +214,7 @@ print_tags(){
 need_tag(){
     TAG=$1
     if [ -z "$TAG" ]; then
-        echo "Please specify a tag. Here's the list:"
-        die "$(print_tags)"
+        die "Please specify a tag. Here's the list: $(print_tags)"
     fi
     echo $TAG
 
@@ -221,10 +225,14 @@ need_tag(){
 check_envvars
 
 case "$1" in
+account)
+    greet
+    aws ec2 describe-account-attributes --attribute-names max-instances --query 'AccountAttributes[*][AttributeValues]'
+    ;;
 ami)
-    # A wrapper for find-ubuntu-ami.sh
+    # A wrapper for scripts/find-ubuntu-ami.sh
     shift
-    ./find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION $*
+    ./scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION $*
     echo
     echo "Protip:"
     echo "./trainer ami -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | cut -d\" \" -f15"
@@ -265,21 +273,22 @@ start)
     TOKEN=$(get_token)  # generate a timestamp token for this batch of VMs
 
     tput bold && tput setaf 5
-    echo "----------------------"
+    echo "---------------------------"
     echo "Starting $2 instances:"
     echo "  Region: $AWS_DEFAULT_REGION"
     echo "  Tag: $TOKEN"
     echo "  AMI: $AMI"
-    echo "----------------------"
+    echo "---------------------------"
     tput sgr0
 
     aws ec2 run-instances \
-    --key-name $AWS_KEY_NAME \
-    --count $2 \
-    --instance-type c3.large \
-    --client-token $TOKEN \
-    --image-id $AMI  | head -2  # Show the reservation number? and first line showing instance details
-    #--user-data file://cloudinit.sh \
+        --key-name $AWS_KEY_NAME \
+        --count $2 \
+        --instance-type c3.large \
+        --client-token $TOKEN \
+        --image-id $AMI  \
+    | head -1
+    echo "---------------------------"
 
     # if instance creation succeeded, we should have some IDs
     IDS=$(get_instance_ids_by_client_token $TOKEN)
@@ -288,7 +297,11 @@ start)
     fi
 
     # Tag these new instances with a tag that is the same as the token
-    aws ec2 create-tags --tag Key=Name,Value=$TOKEN --resources $IDS
+    aws ec2 create-tags --tag Key=Name,Value=$TOKEN --resources $IDS >> /dev/null
+
+    # see aws ec2 wait instance-exists / instance-running / instance-status-ok
+
+    echo "[------------------------------- Waiting for associations -----------------------------------]"
     for ID in $IDS;
     do
         while ! aws ec2 describe-instances --filters "Name=instance-id,Values=$ID" \
@@ -300,20 +313,22 @@ start)
     done
 
     tput setaf 2
-    echo "[-----------------------------------------------------------------------------------]"
-    echo " Successfully created $2 instances with tag: $TOKEN "
+    echo "[--------------------------------------------------------------------------------------------]"
+    echo "        Successfully created $2 instances with tag: $(tput bold)$TOKEN $(tput sgr0)"
 
     # create a directory for this tag, for its ips.txt (and maybe generated cards, someday)
-    mkdir tags/$TOKEN
+    mkdir -p tags/$TOKEN
     get_instance_ips_by_tag $TOKEN > tags/$TOKEN/ips.txt
+    ln -s tags/$TOKEN $TOKEN
     ln -sf tags/$TOKEN/ips.txt ips.txt
     echo " IPs are located in tags/$TOKEN/ips.txt and are symlinked in ./ips.txt."
-    echo "[-----------------------------------------------------------------------------------]"
+    echo "[--------------------------------------------------------------------------------------------]"
     tput sgr0
 
     deploy_tag $TOKEN
-    echo "You may want to test by running the following command:"
-    echo "./trainer test $TOKEN"
+    echo "You may want to test by running one of the following commands:"
+    echo "trainer test $TOKEN"
+    echo "trainer stop $TOKEN"
     ;;
 ids)
     TOKEN=$2
@@ -358,9 +373,8 @@ list)
             $1, $2, $3, $4, $5}' # column -t -c 70}
         echo "                      ====  $TOKEN  ===="
         echo "$header"
-        echo "result: \"$result\"."
+        echo "$result"
     fi
-    exit
     # With column headers (but can't specify column order):
     #aws ec2 describe-instances --output text \
     #    --filter "Name=tag:Name,Values=2016-03-03-18-48-aj" \
@@ -379,6 +393,7 @@ regions)
     # If our $AWS_DEFAULT_REGION is not valid, the error message will be pretty descriptive:
     # Could not connect to the endpoint URL: "https://ec2.foo.amazonaws.com/"
     aws ec2 describe-regions | awk '{print $3}' | grep --color=auto $AWS_DEFAULT_REGION -C50
+
     ;;
 stop)
     TOKEN=$2
@@ -398,14 +413,17 @@ stop)
     # append -stopped to the directory we created
     mv tags/$TOKEN tags/$TOKEN-stopped
     rm ips.txt
+    rm $TOKEN
     ;;
 deploy)
-    TOKEN=$(need_tag $2)
+    TOKEN=$2
+    need_tag $TOKEN
     deploy_tag $TOKEN
     # test_tag $TOKEN
     ;;
 test)
-    TOKEN=$(need_tag $2)
+    TOKEN=$2
+    need_tag $TOKEN
     echo "Testing $TOKEN."
     test_tag $TOKEN
     ;;
@@ -417,7 +435,7 @@ ssh)
     ssh -q -o "StrictHostKeyChecking=no" $user@$ip "$cmd"
     ;;
 *)
-    echo "$0 <start|stop|deploy|ips|ids|tags|tokens|regions|ami|aws|env|opensg|shell> [n-instances|token...]"
+    echo "$0 <start|stop|deploy|ips|ids|tags|tokens|account|regions|ami|aws|env|opensg|shell> [n-instances|token...]"
     ;;
 esac
 

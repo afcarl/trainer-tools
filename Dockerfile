@@ -8,4 +8,4 @@ RUN apt-get install -y \
     jq \
     bsdmainutils \
     pssh
-ENTRYPOINT ["./trainer-cli"]
+ENTRYPOINT ["./scripts/trainer-cli"]

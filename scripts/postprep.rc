@@ -32,6 +32,8 @@ def system(cmd):
             retcode = bold(retcode)
         f.write("[{}]\n".format(retcode))
         STEP += 1
+    with open(".bash_history", "a") as f:
+        f.write("{}\n".format(cmd))
 
 def test_system():
     commands = [
@@ -48,33 +50,47 @@ def test_system():
             retcode = os.system(cmd)
             f.write("  ** [{}] --> {}\n".format(cmd, retcode))
         
+def ip_to_hostname():
+    pass
 
 ### BEGIN CLOUDINIT
 print("Welcome to postprep.rc!")
 begin=os.system("date")
 
-# Fancy prompt courtesy of @soulshake.
-system("sudo chmod 666 /etc/skel/.bashrc")
-system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]: '\" >> .bashrc")
-system("sudo chmod 666 /home/docker/.bashrc")
-system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]\n$ '\" >> /home/docker/.bashrc")
-system("sudo echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]\n$ '\" >> /etc/skel/.bashrc")
-# ps1 = '\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]: '
-# system("sudo echo \"PS1={}\" >> /etc/skel/.bashrc".format(ps1))
-# ps1 = '\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]: '
-# system("echo 'export PS1={}\' | sudo tee -a /etc/skel/.bashrc".format(ps1))
-
 # On EC2, the ephemeral disk might be mounted on /mnt.
 # If /mnt is a mountpoint, place Docker workspace on it.
 system("if mountpoint -q /mnt; then sudo mkdir /mnt/docker && sudo ln -s /mnt/docker /var/lib/docker; fi")
 
-# Set the hostname to be the public IP address of the instance.
-# If the call to myip fails, set a default hostname.
-# Actually, don't. Use the default hostname (ip-172-123-123-123)
+### HOSTNAME FUCKERY ###
+# Set the hostname to be the public IP address of the instance, with '-' instead of '.'.
+# put our public IP and hostname in temporary files
+system("curl --silent http://169.254.169.254/latest/meta-data/public-ipv4 > /tmp/ipv4")
+#system("curl --silent http://169.254.169.254/latest/meta-data/public-ipv4 | tr '.' '-' > /tmp/hostname")
+
+ipv4 = open("/tmp/ipv4").read()
+#hostname = open("/tmp/hostname").read()
+
+#with open("/tmp/etc-hosts-entry", "w") as f:
+#    f.write("{} localhost".format(hostname))
+
+#system("cat /tmp/etc-hosts-entry | sudo tee -a /etc/hosts")
+#system("sudo hostnamectl set-hostname {}".format(hostname))
+
+# system("curl --silent http://169.254.169.254/latest/meta-data/public-ipv4 | tr '.' '-' | xargs sudo hostnamectl set-hostname")
+
+#        hostname_localhost = ipaddr.replace('.', '-') + " localhost"
+#        os.system("grep ^{} /etc/hosts || echo {} | sudo tee -a /etc/hosts"
+#                    .format(hostname_localhost, hostname_localhost))
+#########################
 
 # Add a docker user with password "training"
 system("sudo useradd -d /home/docker -m -s /bin/bash docker")
 system("echo docker:training | sudo chpasswd")
+
+# Fancy prompt courtesy of @soulshake.
+#system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@{}\[\033[0;33m\] \w\[\033[00m\]: '\" >> .bashrc".format(ipv4))
+system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@{}\[\033[0;33m\] \w\[\033[00m\]\n$ '\" | sudo tee -a /home/docker/.bashrc".format(ipv4))
+system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]\n$ '\" | sudo tee -a /etc/skel/.bashrc")
 
 # Copy authorized keys to /home/docker/.ssh/
 #os.system("sudo mkdir -p /home/docker/.ssh")
@@ -169,14 +185,17 @@ system("cat /tmp/pp.status")
 
 clustersize = 5
 
-myaddr = urllib.urlopen("http://myip.enix.org/REMOTE_ADDR").read()
+myaddr = urllib.urlopen("http://169.254.169.254/latest/meta-data/public-ipv4").read()
+#myaddr = urllib.urlopen("http://myip.enix.org/REMOTE_ADDR").read()
 
 addresses = list(l.strip() for l in sys.stdin)
 
 def makenames(addrs):
     return [ "node%s"%(i+1) for i in range(len(addrs)) ]
 
+keys = {}
 while addresses:
+    
     print(addresses)
     cluster = addresses[:clustersize]
     addresses = addresses[clustersize:]
@@ -184,26 +203,39 @@ while addresses:
         continue
     names = makenames(cluster)
     for ipaddr, name in zip(cluster, names):
-        os.system("grep ^%s /etc/hosts || echo %s %s | sudo tee -a /etc/hosts"
-                  %(ipaddr, ipaddr, name))
+        os.system("grep ^{} /etc/hosts || echo {} {} | sudo tee -a /etc/hosts"
+                    .format(ipaddr, ipaddr, name))
     if myaddr == cluster[0]:
-        os.system("[ -f .ssh/id_rsa ] || ssh-keygen -t rsa -f .ssh/id_rsa -P ''")
+        # If I'm node1 and don't have a private key, generate one (with empty passphrase)
+        os.system("[ -f /home/docker/.ssh/id_rsa ] || ssh-keygen -t rsa -f /home/docker/.ssh/id_rsa -P ''")
+        keys[cluster[0]] = open("/home/docker/.ssh/id_rsa.pub").read()
+    else:
+        if cluster[0] in keys:
+            system("cat {} | sudo tee -a /home/docker/authorized_keys".format(keys[cluster[0]]))
+        else:
+            print(cluster)
+            print(keys)
+            print(myaddr)
+            print(addresses)
+            raise
+
 
 end = os.system("date")
 system("echo '{}' && echo '{}'".format(begin, end))
 EOF
+# First, the ssh-keygen needs to happen as the "docker" user
+# But that part is pretty easy, it just has to be wrapped with sudo and it should work then
+# i.e. [ if I'm node1 ] && sudo -u docker ssh-keygen -t rsa blablabla
+# then...  SUDO ALL THE THINGS, i.e.
+#  sudo -u docker [ /home/docker/.ssh/id_rsa ] || sudo -u docker scp node1:.ssh/id_rsa /home/docker/.ssh/id_rsa
+# then you test that by pssh'ing into a 5 node cluster to see what happens
+# and when you test, you pass -i to pssh so you can see the output
 
-echo "Executing postprep.py..."
 pssh --timeout 600 --send-input "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/pp.err" < ips.txt
-retcode=$(echo $?)
-echo $retcode
-if [ $retcode -ne 0 ]; then
-    echo "Execution of postprep.py failed; exit code was $retcode"
-    ssh ubuntu@$(tail -1 ips.txt) "cat /tmp/pp.out"
-fi
 
-echo "Disabling StrictHostKeyChecking on node1." | tee -a /tmp/pp.status
-pssh "[ -f .ssh/id_rsa ] || scp -o StrictHostKeyChecking=no node1:.ssh/id_rsa* .ssh"
+echo "If /home/docker/.ssh/id_rsa doesn't exist, copy it from node1." | tee -a /tmp/pp.status
+pssh "[ -f /home/docker/.ssh/id_rsa ] || scp -o StrictHostKeyChecking=no node1:/home/docker/.ssh/id_rsa* /home/docker/.ssh"
 
-echo "grepping for docker@ in .ssh/authorized_keys" | tee -a /tmp/pp.status
-pssh "grep docker@ .ssh/authorized_keys || cat .ssh/id_rsa.pub >> .ssh/authorized_keys"
+# if 'docker@' doesn't appear in /home/docker/.ssh/authorized_keys, copy it there
+pssh "grep docker@ /home/docker/.ssh/authorized_keys || cat /home/docker/.ssh/id_rsa.pub sudo tee -a /home/docker/.ssh/authorized_keys"
+
