@@ -4,50 +4,74 @@
 
 Required environment variables:
 
-* `AWS_SECRET_KEY_ID`
+* `AWS_ACCESS_KEY_ID`
 * `AWS_SECRET_ACCESS_KEY`
-* `AWS_REGION`
+* `AWS_DEFAULT_REGION`
 
-Optional environment variables:
 
-* `AWS_REGION` (defaults to `us-west-1`
-* `AWS_INSTANCE_TYPE` (defaults to `m3.large`)
-* `WORKSHOP_TAG` (defaults to your username and today's date)
+Currently, it is not possible to specify a custom tag.
 
 ## Usage
 
+You can create a symlink in your path for this script:
+
+  ln -s $PWD/trainer $HOME/bin/trainer
+
+But note that the script is not smart enough to know its real directory,
+so only use the symlink there!
 
 ### Start some VMs
 
-    $ ./train start 10
+    $ ./trainer start 10
 
-If no VMs tagged YOUR_TAG exist yet, 10 will be started.
+A few things will happen:
 
-If 2 already exist, 8 more will be started.
+#### Instance + tag creation
+
+10 VMs will be started and tagged with a timestamp + your username.
 
 #### Sync of SSH keys
 
-When the `start` command is run, any public SSH keys you've added locally (`ssh-add`) will be added to your AWS EC2 keychain.
+When the `start` command is run, your local RSA SSH public key will be added to your AWS EC2 keychain.
 
-Run `ssh-add -L` or `-l` to see local keys.
+To see which local key will be uploaded, run `ssh-add -l | grep RSA`.
 
-#### Creation of ips_YOUR_TAG.txt
+#### Creation of ./$TAG/ directory and contents
 
 Following the creation of the VMs, a text file will be created containing a list of their IPs.
 
+This ips.txt file will be created in the $TAG/ directory and a symlink will be placed in the working directory of the script.
+
+#### Deployment
+
+If the instances were created successfully, the script will attempt to deploy them.
+
+Instances can also be deployed manually using the `deploy` command.
+
 ### List VMs
 
-    $ ./train list
+    $ trainer list TAG
 
 ### Deploy VMs
 
 You probably want some configuration of the VMs based on the workshop you're administering. 
 
-    $ ./train deploy PATH/TO/YOUR_POSTPREP.rc
+    $ trainer deploy TAG
 
 This file will be copied via parallel-ssh to all of the VMs and executed.
 
 
 ### Stop and destroy VMs
 
-    $ ./train kill YOUR_TAG
+    $ trainer stop TAG
+
+## To do
+
+### Optional environment variables:
+
+* `AWS_INSTANCE_TYPE` (current behavior: `m3.large`)
+* `WORKSHOP_TAG` (current behavior: tag generated with your username and today's date)
+
+### Symlink support
+
+Allow running a symlink to ./trainer from any working directory.

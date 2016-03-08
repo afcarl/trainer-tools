@@ -1,0 +1,16 @@
+# FIXME: add structure data here
+
+clustersize: 5
+pagesize: 12
+blurb: Here is the connection information to your very own 
+       cluster for this orchestration workshop. You can connect 
+       to each VM with any SSH client.
+
+       Your machines are:
+            node: ip
+            node: ip
+            node: ip
+            node: ip
+            node: ip
+
+slides_url: http://container.training/

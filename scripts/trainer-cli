@@ -446,8 +446,25 @@ ssh)
     cmd=$*
     ssh -q -o "StrictHostKeyChecking=no" $user@$ip "$cmd"
     ;;
+workshop)
+    # set active workshop
+    workshop=$2
+    if [ -z $workshop ]; then
+        die "Please specify a workshop."
+    fi
+    if [ -f workshops/$workshop/settings.txt ]; then
+        ln -sf workshops/$workshop/settings.txt settings.txt
+        echo "Activated workshop $workshop (see ./settings.txt)."
+    else
+        echo "workshops/$workshop/settings.txt doesn't exist."
+        echo "Try one of these:"
+        ls --color=always -C workshops
+        exit 1
+    fi
+
+    ;;
 *)
-    echo "$0 <start|stop|deploy|ips|ids|tags|tokens|account|regions|ami|aws|env|opensg|shell> [n-instances|token...]"
+    echo "$0 <start|stop|deploy|ips|ids|tags|tokens|account|regions|ami|aws|env|opensg|shell|workshop> [n-instances|token...]"
     ;;
 esac
 
