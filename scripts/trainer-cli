@@ -221,6 +221,13 @@ need_tag(){
     # TODO: Tag validation?
 }
 
+make_tag(){
+    # Generate cards for a given tag
+    TAG=$1
+    python ./scripts/ips-txt-to-html.py
+    mv ips.html tags/$TAG
+    ln -s tags/$TAG/ips.html ips.html
+}
 
 check_envvars
 
@@ -413,6 +420,7 @@ stop)
     mv tags/$TOKEN tags/$TOKEN-stopped
     rm ips.txt
     rm $TOKEN
+    ln -s tags/$TOKEN-stopped $TOKEN-stopped
     ;;
 deploy)
     TOKEN=$2
@@ -425,6 +433,11 @@ test)
     need_tag $TOKEN
     echo "Testing $TOKEN."
     test_tag $TOKEN
+    ;;
+cards)
+    TOKEN=$2
+    need_tag $TOKEN
+    make_tag $TOKEN
     ;;
 ssh)
     user=docker
