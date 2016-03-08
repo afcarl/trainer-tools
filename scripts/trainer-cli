@@ -399,7 +399,6 @@ stop)
     TOKEN=$2
     need_tag $TOKEN
     IDS=$(get_instance_ids_by_tag $TOKEN)
-    echo "$IDS"
     if [ -z "$IDS" ]; then
         die "Invalid tag."
     else
