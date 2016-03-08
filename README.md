@@ -50,13 +50,13 @@ Instances can also be deployed manually using the `deploy` command.
 
 ### List VMs
 
-    $ trainer list TAG
+    $ ./trainer list TAG
+
+This will print a human-friendly list containing some information about each instance.
 
 ### Deploy VMs
 
-You probably want some configuration of the VMs based on the workshop you're administering. 
-
-    $ trainer deploy TAG
+    $ ./trainer deploy TAG
 
 This file will be copied via parallel-ssh to all of the VMs and executed.
 
@@ -75,3 +75,9 @@ This file will be copied via parallel-ssh to all of the VMs and executed.
 ### Symlink support
 
 Allow running a symlink to ./trainer from any working directory.
+
+### Custom deployment behavior
+
+Allow configuration of the VMs based on the workshop you're administering. 
+
+Current behavior: defaults to postprep.rc
