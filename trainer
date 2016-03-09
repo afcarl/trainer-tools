@@ -1,4 +1,5 @@
 #!/bin/sh
+export SCRIPT_PATH=$(dirname $(readlink -f $0))
 
 docker run --rm -ti \
     --name trainer \
@@ -11,10 +12,17 @@ docker run --rm -ti \
     -e AWS_SESSION_TOKEN \
     -e USER \
     -e SSH_AUTH_SOCK \
-    -v $(dirname $SSH_AUTH_SOCK):$(dirname $SSH_AUTH_SOCK) \
+    -e SCRIPT_PATH=/trainer-tools \
+    -e LOCAL_PATH=$SCRIPT_PATH \
     -v `pwd`:/workdir \
+    -v $SCRIPT_PATH:/trainer-tools/ \
+    -v $(dirname $SSH_AUTH_SOCK):$(dirname $SSH_AUTH_SOCK) \
     -w /workdir \
+    --entrypoint "/trainer-tools/scripts/trainer-cli" \
     soulshake/trainer "$@"
+#-e SCRIPT=$(readlink -f $0) \
+#-v $(dirname $(readlink -f $0)):/workdir \
+#-e SCRIPT_PATH=$(readlink -f $0) \
 # -e AWS_SECRET_ACCESS_KEY \
 #-e AWS_SECRET_KEY \
 #-e AWS_ACCESS_KEY_ID \
