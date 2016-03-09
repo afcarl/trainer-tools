@@ -6,6 +6,7 @@ pssh -I tee /tmp/postprep.py <<EOF
 COMPOSE_VERSION = "1.6.2"
 MACHINE_VERSION = "0.6.0"
 SWARM_VERSION = "1.1.3"
+CLUSTER_SIZE = 5
 
 #################################
 
@@ -23,8 +24,6 @@ def bold(msg):
 
 def system(cmd):
     global STEP
-    # can also use subprocess.check_call
-    # but have to pass an extra flag to do shell processing
     with open("/tmp/pp.status", "a") as f:
         f.write(bold("--- RUNNING [step {}] ---> {}...".format(STEP, cmd)))
         retcode = os.system(cmd)
@@ -35,24 +34,6 @@ def system(cmd):
     with open("/home/ubuntu/.bash_history", "a") as f:
         f.write("{}\n".format(cmd))
 
-def test_system():
-    commands = [
-        "hostname",
-        "sudo -u docker ls -la /mnt/docker",
-        "which fig",
-        "sudo -u docker docker version",
-        "sudo -u docker curl --silent localhost:55555",
-        "sudo -u docker docker images",
-        "sudo -u docker docker ps",
-    ]
-    with open("/tmp/pp.status", "a") as f:
-        for cmd in commands:
-            retcode = os.system(cmd)
-            f.write("  ** [{}] --> {}\n".format(cmd, retcode))
-        
-def ip_to_hostname():
-    pass
-
 ### BEGIN CLOUDINIT
 print("Welcome to postprep.rc!")
 
@@ -60,40 +41,17 @@ print("Welcome to postprep.rc!")
 # If /mnt is a mountpoint, place Docker workspace on it.
 system("if mountpoint -q /mnt; then sudo mkdir /mnt/docker && sudo ln -s /mnt/docker /var/lib/docker; fi")
 
-### HOSTNAME FUCKERY ###
-# Set the hostname to be the public IP address of the instance, with '-' instead of '.'.
-# put our public IP and hostname in temporary files
+# Put our public IP in a temporary file
 system("curl --silent http://169.254.169.254/latest/meta-data/public-ipv4 > /tmp/ipv4")
 
 ipv4 = open("/tmp/ipv4").read()
 
-#system("curl --silent http://169.254.169.254/latest/meta-data/public-ipv4 | tr '.' '-' > /tmp/hostname")
-#hostname = open("/tmp/hostname").read()
-#with open("/tmp/etc-hosts-entry", "w") as f:
-#    f.write("{} localhost".format(hostname))
-#system("cat /tmp/etc-hosts-entry | sudo tee -a /etc/hosts")
-#system("sudo hostnamectl set-hostname {}".format(hostname))
-# system("curl --silent http://169.254.169.254/latest/meta-data/public-ipv4 | tr '.' '-' | xargs sudo hostnamectl set-hostname")
-
-#        hostname_localhost = ipaddr.replace('.', '-') + " localhost"
-#        os.system("grep ^{} /etc/hosts || echo {} | sudo tee -a /etc/hosts"
-#                    .format(hostname_localhost, hostname_localhost))
-#########################
-
-# Add a docker user with password "training"
+# Add a "docker" user with password "training"
 system("sudo useradd -d /home/docker -m -s /bin/bash docker")
 system("echo docker:training | sudo chpasswd")
 
 # Fancy prompt courtesy of @soulshake.
-#system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@{}\[\033[0;33m\] \w\[\033[00m\]: '\" >> .bashrc".format(ipv4))
 system("echo \"export PS1='\e[1m\[\033[0;32m\][\h] \e[1m\[\033[0;35m\]\u@{}\[\033[0;33m\] \w\[\033[00m\]\n$ '\" | sudo -u docker tee -a /home/docker/.bashrc".format(ipv4))
-#system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]\n$ '\" | sudo tee -a /etc/skel/.bashrc")
-
-# Copy authorized keys to /home/docker/.ssh/
-#os.system("sudo -u docker mkdir -p /home/docker/.ssh")
-#os.system("sudo -u docker cp /home/ubuntu/.ssh/authorized_keys /home/docker/.ssh/authorized_keys")
-#os.system("sudo chown docker /home/docker/.ssh")
-#os.system("sudo chown docker /home/docker/.ssh/authorized_keys")
 
 # add docker user to sudoers and allow password authentication
 system("sudo bash -c \"echo 'docker ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/docker\"")
@@ -121,17 +79,13 @@ system("sudo systemctl daemon-reload")
 
 # There seems to be a bug in the systemd scripts; so work around it.
 # See https://github.com/docker/docker/issues/18444
-# if docker is already running, need to do a restart
+# If docker is already running, need to do a restart
 system("curl --silent localhost:55555 || sudo systemctl restart docker ")  # does this work? if not, next line should cover it
 system("sudo systemctl start docker || true")
 
 ### Install docker-compose
-# we'll use pip because interrupt signals are broken in the single binary version of 1.6.whatever-rc
 # CHECKME - need sudo here?
 system("sudo pip install -U docker-compose=={}".format(COMPOSE_VERSION))
-
-# Link so that older versions of the training still work properly
-system("sudo ln -sf /usr/local/bin/docker-compose /usr/local/bin/fig")
 
 ### Install docker-machine
 os.system("sudo curl -sSL -o /usr/local/bin/docker-machine https://github.com/docker/machine/releases/download/v{}/docker-machine-$(uname -s)-$(uname -m)".format(MACHINE_VERSION))
@@ -162,13 +116,7 @@ system("docker pull swarm:{}".format(SWARM_VERSION))
 system("docker tag -f swarm:{} swarm".format(SWARM_VERSION))
 
 
-system("echo 'end of cloudinit section of postprep.rc'")
-
-### END CLOUDINIT
-
 ### BEGIN CLUSTERING ###
-
-clustersize = 5
 
 myaddr = urllib.urlopen("http://169.254.169.254/latest/meta-data/public-ipv4").read()
 system("echo myaddr: {}".format(myaddr))
@@ -180,8 +128,8 @@ def makenames(addrs):
 
 while addresses:
     print(addresses)
-    cluster = addresses[:clustersize]
-    addresses = addresses[clustersize:]
+    cluster = addresses[:CLUSTER_SIZE]
+    addresses = addresses[CLUSTER_SIZE:]
     if myaddr not in cluster:
         continue
     names = makenames(cluster)
@@ -190,7 +138,6 @@ while addresses:
                     .format(ipaddr, ipaddr, name))
 
     mynode = cluster.index(myaddr) + 1
-    system("echo 'i am node{}'".format(mynode))
     system("echo 'node{}' | sudo -u docker tee /tmp/node".format(mynode))
     system("sudo -u docker mkdir -p /home/docker/.ssh")
     system("sudo -u docker touch /home/docker/.ssh/authorized_keys")
@@ -201,13 +148,6 @@ while addresses:
 
 EOF
 
-
-
-# First, the ssh-keygen needs to happen as the "docker" user
-# But that part is pretty easy, it just has to be wrapped with sudo and it should work then
-# i.e. [ if I'm node1 ] && sudo -u docker ssh-keygen -t rsa blablabla
-# then...  SUDO ALL THE THINGS, i.e.
-#  sudo -u docker [ /home/docker/.ssh/id_rsa ] || sudo -u docker scp -v node1:.ssh/id_rsa /home/docker/.ssh/id_rsa
 # then you test that by pssh'ing into a 5 node cluster to see what happens
 # and when you test, you pass -i to pssh so you can see the output
 
@@ -215,7 +155,6 @@ pssh --timeout 600 --send-input "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/p
 
 # If /home/docker/.ssh/id_rsa doesn't exist, copy it from node1
 pssh "sudo -u docker [ -f /home/docker/.ssh/id_rsa ] || ssh -o StrictHostKeyChecking=no node1 sudo -u docker tar -C /home/docker -cvf- .ssh | sudo -u docker tar -C /home/docker -xf-"
-#pssh "[ -f /home/docker/.ssh/id_rsa ] || ssh node1 sudo -u docker tar -C /home/docker -cvf- .ssh"
 
 # if 'docker@' doesn't appear in /home/docker/.ssh/authorized_keys, copy it there
 pssh "grep docker@ /home/docker/.ssh/authorized_keys \
