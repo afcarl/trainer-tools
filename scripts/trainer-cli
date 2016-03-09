@@ -84,13 +84,28 @@ link_tag() {
         echo "Cards are located in $LOCAL_PATH/tags/$TOKEN/ips.html and are symlinked in ./ips.html"
     )
 }
+
+unlink_tag() {
+    # remove symlinks, and append -stopped to the directory we created
+    TOKEN=$1
+    (
+        cd $SCRIPT_PATH
+        for f in ips.txt ips.html $TOKEN; do
+            if [ -L "$f" ]; then
+                rm $f
+            fi
+        done
+
+        mv tags/$TOKEN tags/$TOKEN-stopped
+        ln -s tags/$TOKEN-stopped $TOKEN-stopped
+    )
+}
+
 deploy_tag(){
     TOKEN=$1
     need_tag $TOKEN
     link_tag $TOKEN
     ips_file=$SCRIPT_PATH/ips.txt
-    #ips_file=$SCRIPT_PATH/tags/$TOKEN/ips.txt
-    # ln -sf $ips_file $SCRIPT_PATH/ips.txt
 
     # wait until we can at least run a simple command on the host via SSH before trying to deploy
     echo -n "Waiting for initial contact."
@@ -299,22 +314,38 @@ make_tag(){
     (
         cd $SCRIPT_PATH
         python scripts/ips-txt-to-html.py
-        mv ips.html tags/$TAG
-        ln -s tags/$TAG/ips.html ips.html
+        mv ips.html tags/$TAG/ips.html
+        link_tag $TAG
     )
 }
 
 check_envvars
 
 case "$1" in
-shell)
-    # Get a shell in the container
-    export PS1="trainer@$AWS_DEFAULT_REGION# "
-    exec $SHELL
+ami)
+    # A wrapper for scripts/find-ubuntu-ami.sh
+    shift
+    $SCRIPT_PATH/scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION $*
+    echo
+    echo "Protip:"
+    echo "./trainer ami -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | cut -d\" \" -f15"
+    echo
+    echo "Suggestions:"
+    suggest_amis
     ;;
 aws)
     # Wrapper to run arbitrary AWS CLI commands in this container
     "$@"
+    ;;
+cards)
+    TOKEN=$2
+    need_tag $TOKEN
+    make_tag $TOKEN
+    ;;
+deploy)
+    TOKEN=$2
+    need_tag $TOKEN
+    deploy_tag $TOKEN
     ;;
 env)
     env  # Print this container's environment variables
@@ -328,17 +359,6 @@ opensg)
     ec2-authorize -P tcp -p -1 default
     ec2-authorize -P udp -p -1 default
     ec2-authorize -P icmp -t -1:-1 default
-    ;;
-ami)
-    # A wrapper for scripts/find-ubuntu-ami.sh
-    shift
-    $SCRIPT_PATH/scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION $*
-    echo
-    echo "Protip:"
-    echo "./trainer ami -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | cut -d\" \" -f15"
-    echo
-    echo "Suggestions:"
-    suggest_amis
     ;;
 start)
     # Create $2 instances
@@ -380,6 +400,7 @@ start)
 
     # Tag these new instances with a tag that is the same as the token
     aws ec2 create-tags --tag Key=Name,Value=$TOKEN --resources $IDS >> /dev/null
+    IPS_COUNT=$(get_instance_ips_by_tag $TOKEN | wc -l)
 
     echo "[------------------------------- Waiting for associations -----------------------------------]"
     # see aws ec2 wait instance-exists / instance-running / instance-status-ok
@@ -398,7 +419,6 @@ start)
     tput setaf 2
     echo "[--------------------------------------------------------------------------------------------]"
     echo "        Successfully created $2 instances with tag: $(tput bold)$TOKEN $(tput sgr0)"
-    link_tag $TOKEN
     echo "[--------------------------------------------------------------------------------------------]"
     tput sgr0
 
@@ -456,19 +476,33 @@ list)
     #    --filter "Name=tag:Name,Values=2016-03-03-18-48-aj" \
     #    --query "Reservations[*].Instances[*].{PublicIpAddress:PublicIpAddress,State:State}" 
     ;;
-tags)
-    print_tags
-    ;;
-tokens)
-    aws ec2 describe-instances --output text \
-            --query 'Reservations[*].Instances[*].[ClientToken]' \
-        | sort -u
-    ;;
 regions)
     # Print list of AWS EC2 regions, highlighting ours ($AWS_DEFAULT_REGION) in the list
     # If our $AWS_DEFAULT_REGION is not valid, the error message will be pretty descriptive:
     # Could not connect to the endpoint URL: "https://ec2.foo.amazonaws.com/"
     aws ec2 describe-regions | awk '{print $3}' | grep --color=auto $AWS_DEFAULT_REGION -C50
+    ;;
+scrape-slides)
+    SCRIPTS_PATH=$(dirname $(readlink -f $0))
+    SLIDES_FILE=$2
+    TARGET="$(dirname $SCRIPTS_PATH)/extracted-commands.txt"
+    LOCAL_TARGET="$LOCAL_PATH/extracted-commands.txt"
+    echo "Scraping slides and placing extracted commands in $LOCAL_TARGET"
+    $SCRIPTS_PATH/scrape-slides.py $SLIDES_FILE > $TARGET
+    ;;
+shell)
+    # Get a shell in the container
+    export PS1="trainer@$AWS_DEFAULT_REGION# "
+    exec $SHELL
+    ;;
+ssh)
+    # execute arbitrary commands on one of the IPs in our active batch
+    user=docker
+    echo $SCRIPT_PATH/ips.txt
+    ip=$(tail -1 $SCRIPT_PATH/ips.txt)
+    shift
+    cmd=$*
+    ssh -q -o "StrictHostKeyChecking=no" $user@$ip "$cmd"
     ;;
 stop)
     TOKEN=$2
@@ -484,47 +518,20 @@ stop)
         | xargs -r aws ec2 terminate-instances --instance-ids \
         | grep ^TERMINATINGINSTANCES
 
-    # remove symlinks, and append -stopped to the directory we created
-    for f in ips.txt ips.html $TOKEN; do
-        if [ -L "$SCRIPT_PATH/$f" ]; then
-            rm $SCRIPT_PATH/$f
-        fi
-    done
-
-    mv $SCRIPT_PATH/tags/$TOKEN $SCRIPT_PATH/tags/$TOKEN-stopped
-    ln -s $SCRIPT_PATH/tags/$TOKEN-stopped $SCRIPT_PATH/$TOKEN-stopped
+    unlink_tag $TOKEN
     ;;
-deploy)
-    TOKEN=$2
-    need_tag $TOKEN
-    deploy_tag $TOKEN
+tags)
+    print_tags
     ;;
 test)
     TOKEN=$2
     need_tag $TOKEN
     test_tag $TOKEN
     ;;
-cards)
-    TOKEN=$2
-    need_tag $TOKEN
-    make_tag $TOKEN
-    ;;
-scrape-slides)
-    SCRIPTS_PATH=$(dirname $(readlink -f $0))
-    SLIDES_FILE=$2
-    TARGET="$(dirname $SCRIPTS_PATH)/extracted-commands.txt"
-    LOCAL_TARGET="$LOCAL_PATH/extracted-commands.txt"
-    echo "Scraping slides and placing extracted commands in $LOCAL_TARGET"
-    $SCRIPTS_PATH/scrape-slides.py $SLIDES_FILE > $TARGET
-    ;;
-ssh)
-    # execute arbitrary commands on one of the IPs in our active batch
-    user=docker
-    echo $SCRIPT_PATH/ips.txt
-    ip=$(tail -1 $SCRIPT_PATH/ips.txt)
-    shift
-    cmd=$*
-    ssh -q -o "StrictHostKeyChecking=no" $user@$ip "$cmd"
+tokens)
+    aws ec2 describe-instances --output text \
+            --query 'Reservations[*].Instances[*].[ClientToken]' \
+        | sort -u
     ;;
 workshop)
     # set active workshop
