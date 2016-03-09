@@ -1,5 +1,6 @@
 #!/bin/sh
-export SCRIPT_PATH=$(dirname $(readlink -f $0))
+#export SCRIPT_PATH=$(dirname $(readlink --canonicalize $0))
+export SCRIPT_PATH=$(dirname $(readlink $0))
 
 docker run --rm -ti \
     --name trainer \
@@ -19,13 +20,4 @@ docker run --rm -ti \
     -v $(dirname $SSH_AUTH_SOCK):$(dirname $SSH_AUTH_SOCK) \
     -w /workdir \
     --entrypoint "/trainer-tools/scripts/trainer-cli" \
-    soulshake/trainer "$@"
-#-e SCRIPT=$(readlink -f $0) \
-#-v $(dirname $(readlink -f $0)):/workdir \
-#-e SCRIPT_PATH=$(readlink -f $0) \
-# -e AWS_SECRET_ACCESS_KEY \
-#-e AWS_SECRET_KEY \
-#-e AWS_ACCESS_KEY_ID \
-#-e AWS_VPC_ID \
-#-e AWS_ACCESS_KEY \
-#-e AMAZON_REGION \
+    soulshake/trainer-tools "$@"
