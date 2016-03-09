@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+# FIXME: get settings from settings.txt symlink in basedir
+
 SETTINGS_BASIC = dict(
     clustersize=1,
     pagesize=15,

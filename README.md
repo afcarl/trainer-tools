@@ -65,6 +65,16 @@ This file will be copied via parallel-ssh to all of the VMs and executed.
 
     $ trainer stop TAG
 
+## Set up a new workshop
+
+Create a subdirectory in workshops/ with a simple identifier for your workshop.
+From that directory, run:
+
+    $ git submodule add <url_of_your_repo>
+
+Run:
+    $ scripts/scrape-slides.py PATH_TO_YOUR_SLIDES_INDEX.HTML
+
 ## To do
 
 ### Optional environment variables:
