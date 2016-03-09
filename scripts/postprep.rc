@@ -5,7 +5,7 @@ pssh -I tee /tmp/postprep.py <<EOF
 
 COMPOSE_VERSION = "1.6.2"
 MACHINE_VERSION = "0.6.0"
-SWARM_VERSION = "1.1.3-rc1"
+SWARM_VERSION = "1.1.3"
 
 #################################
 
@@ -86,8 +86,8 @@ system("echo docker:training | sudo chpasswd")
 
 # Fancy prompt courtesy of @soulshake.
 #system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@{}\[\033[0;33m\] \w\[\033[00m\]: '\" >> .bashrc".format(ipv4))
-system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@{}\[\033[0;33m\] \w\[\033[00m\]\n$ '\" | sudo -u docker tee -a /home/docker/.bashrc".format(ipv4))
-system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]\n$ '\" | sudo tee -a /etc/skel/.bashrc")
+system("echo \"export PS1='\e[1m\[\033[0;32m\][\h] \e[1m\[\033[0;35m\]\u@{}\[\033[0;33m\] \w\[\033[00m\]\n$ '\" | sudo -u docker tee -a /home/docker/.bashrc".format(ipv4))
+#system("echo \"export PS1='\e[1m\[\033[0;35m\]\u@`hostname -i`\[\033[0;33m\] \w\[\033[00m\]\n$ '\" | sudo tee -a /etc/skel/.bashrc")
 
 # Copy authorized keys to /home/docker/.ssh/
 #os.system("sudo -u docker mkdir -p /home/docker/.ssh")
@@ -100,8 +100,7 @@ system("sudo bash -c \"echo 'docker ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/doc
 system("sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config")
 
 system("sudo service ssh restart")
-# FIXME
-#system("sudo apt-get -q update")
+system("sudo apt-get -q update")
 system("sudo apt-get -qy install git jq python-pip")
 
 # increase the size of the conntrack table so we don't blow it up when going crazy with http load testing
@@ -153,13 +152,14 @@ for I in [
         "training/namer",
         "nathanleclaire/redisonrails"
         ]:
-    pass
-    # FIXME
-    # system("sudo -u docker docker pull {}".format(I))
+    system("sudo -u docker docker pull {}".format(I))
+
+system("sudo apt-get remove -y --purge dnsmasq-base")
+system("sudo apt-get -qy install python-setuptools pssh apache2-utils httping htop unzip")
 
 ### Install Swarm
-os.system("docker pull swarm:{}".format(SWARM_VERSION))
-os.system("docker tag -f swarm:{} swarm".format(SWARM_VERSION))
+system("docker pull swarm:{}".format(SWARM_VERSION))
+system("docker tag -f swarm:{} swarm".format(SWARM_VERSION))
 
 
 system("echo 'end of cloudinit section of postprep.rc'")
@@ -172,7 +172,6 @@ clustersize = 5
 
 myaddr = urllib.urlopen("http://169.254.169.254/latest/meta-data/public-ipv4").read()
 system("echo myaddr: {}".format(myaddr))
-#myaddr = urllib.urlopen("http://myip.enix.org/REMOTE_ADDR").read()
 
 addresses = list(l.strip() for l in sys.stdin)
 
@@ -189,15 +188,20 @@ while addresses:
     for ipaddr, name in zip(cluster, names):
         system("grep ^{} /etc/hosts || echo {} {} | sudo tee -a /etc/hosts"
                     .format(ipaddr, ipaddr, name))
-    system("echo 'i am node{}'".format(cluster.index(myaddr)))
-    system("echo 'node{}' | sudo -u docker tee /tmp/node".format(cluster.index(myaddr)))
+
+    mynode = cluster.index(myaddr) + 1
+    system("echo 'i am node{}'".format(mynode))
+    system("echo 'node{}' | sudo -u docker tee /tmp/node".format(mynode))
     system("sudo -u docker mkdir -p /home/docker/.ssh")
     system("sudo -u docker touch /home/docker/.ssh/authorized_keys")
+
     if myaddr == cluster[0]:
         # If I'm node1 and don't have a private key, generate one (with empty passphrase)
         system("sudo -u docker [ -f /home/docker/.ssh/id_rsa ] || sudo -u docker ssh-keygen -t rsa -f /home/docker/.ssh/id_rsa -P ''")
 
 EOF
+
+
 
 # First, the ssh-keygen needs to happen as the "docker" user
 # But that part is pretty easy, it just has to be wrapped with sudo and it should work then
@@ -207,9 +211,9 @@ EOF
 # then you test that by pssh'ing into a 5 node cluster to see what happens
 # and when you test, you pass -i to pssh so you can see the output
 
-pssh --timeout 600 --send-input "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/pp.err" < ips.txt
+pssh --timeout 600 --send-input "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/pp.err" < $SCRIPT_PATH/ips.txt
 
-echo "If /home/docker/.ssh/id_rsa doesn't exist, copy it from node1." | tee -a /tmp/pp.status
+# If /home/docker/.ssh/id_rsa doesn't exist, copy it from node1
 pssh "sudo -u docker [ -f /home/docker/.ssh/id_rsa ] || ssh -o StrictHostKeyChecking=no node1 sudo -u docker tar -C /home/docker -cvf- .ssh | sudo -u docker tar -C /home/docker -xf-"
 #pssh "[ -f /home/docker/.ssh/id_rsa ] || ssh node1 sudo -u docker tar -C /home/docker -cvf- .ssh"
 
