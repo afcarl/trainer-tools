@@ -20,9 +20,10 @@ if __name__ == '__main__':
         exercises = []
         for line in slide:
             line = line.strip(' ')
-            if line.startswith("<br/>`"):
-                commands = [x for x in line.split("`") if x not in ['<br/>', '']]
-                exercises.extend(commands)
+            if line.startswith("<br/>"):
+                if '`' in line:
+                    commands = [x for x in line.split("`")]# if x not in ['<br/>', '']]
+                    exercises.extend(commands[1::2])
             if ".exercise[" in line:
                 i = raw_slide.index(".exercise[") + 10
                 exercises.extend(raw_slide[i:].split("```")[1::2])

@@ -87,8 +87,10 @@ link_tag() {
 deploy_tag(){
     TOKEN=$1
     need_tag $TOKEN
-    ips_file=$SCRIPT_PATH/tags/$TOKEN/ips.txt
-    ln -sf $ips_file $SCRIPT_PATH/ips.txt
+    link_tag $TOKEN
+    ips_file=$SCRIPT_PATH/ips.txt
+    #ips_file=$SCRIPT_PATH/tags/$TOKEN/ips.txt
+    # ln -sf $ips_file $SCRIPT_PATH/ips.txt
 
     # wait until we can at least run a simple command on the host via SSH before trying to deploy
     echo -n "Waiting for initial contact."
@@ -396,20 +398,18 @@ start)
     tput setaf 2
     echo "[--------------------------------------------------------------------------------------------]"
     echo "        Successfully created $2 instances with tag: $(tput bold)$TOKEN $(tput sgr0)"
-
     link_tag $TOKEN
     echo "[--------------------------------------------------------------------------------------------]"
     tput sgr0
 
     deploy_tag $TOKEN
-    echo "You may want to test by running one of the following commands:"
+    echo "You may want to now run one of the following commands:"
     echo "trainer test $TOKEN"
     echo "trainer stop $TOKEN"
     ;;
 ids)
     TOKEN=$2
     need_tag $TOKEN
-
     IDS=$(get_instance_ids_by_tag $TOKEN)
     echo "$IDS"
 
