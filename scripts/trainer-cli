@@ -42,7 +42,9 @@ pcopykey () {
 }
 
 die () {
-    echo "$(tput setaf 1) $1 $(tput sgr0)"
+    echo $(tput setaf 1)
+    echo -e "$1"
+    echo $(tput sgr0)
     exit 1
 }
 
@@ -76,14 +78,41 @@ link_tag() {
     (
         cd $SCRIPT_DIR
         mkdir -p tags/$TOKEN
-        cat 01_active-tag > tags/$TOKEN/01_tag
-        cat 02_active-workshop > tags/$TOKEN/02_workshop
+        # cat 01_active-workshop > tags/$TOKEN/01_workshop
+        # cat 02_active-tag > tags/$TOKEN/02_tag
         get_instance_ips_by_tag $TOKEN > tags/$TOKEN/ips.txt
-        ln -sf tags/$TOKEN $TOKEN
+        ln -sf tags/$TOKEN ./$TOKEN
         ln -sf tags/$TOKEN/ips.txt ips.txt
         echo "IPs: $LOCAL_PATH/ips.txt "
         ln -sf tags/$TOKEN/ips.html ips.html
         echo "Cards: $LOCAL_PATH/ips.html"
+    )
+}
+
+workshop_is_active(){
+    WORKSHOP=$1
+    (
+        cd $SCRIPT_DIR
+        ACTIVE_WORKSHOP=$(cat 01_active-workshop)
+        if [[ $ACTIVE_WORKSHOP == $WORKSHOP ]]; then
+            echo 1
+        else
+            echo 0
+        fi
+    )
+}
+
+tag_is_active(){
+    TOKEN=$1
+    (
+        cd $SCRIPT_DIR
+        ACTIVE_TOKEN=$(cat 02_active-tag)
+        if [[ $ACTIVE_TOKEN == $TOKEN ]]; then
+            echo 1
+        else
+            echo 0
+        fi
+
     )
 }
 
@@ -92,11 +121,17 @@ unlink_tag() {
     TOKEN=$1
     (
         cd $SCRIPT_DIR
-        for f in ips.txt ips.html $TOKEN; do
-            if [ -L "$f" ]; then
-                rm $f
-            fi
-        done
+        if [ $(tag_is_active $TOKEN) ]; then
+            for f in ips.txt ips.html $TOKEN; do
+                if [ -L "$f" ]; then
+                    rm $f
+                fi
+            done
+
+            echo "" > 02_active-tag
+        else
+            echo "$TOKEN is not active; not unlinking."
+        fi
 
         mv tags/$TOKEN tags/$TOKEN-stopped
         ln -s tags/$TOKEN-stopped $TOKEN-stopped
@@ -122,11 +157,43 @@ deploy_tag(){
     tput sgr0
 
     yellow "[[ Deploying tag $(tput bold)$TOKEN ]]$(tput sgr0)"
-    #source $SCRIPT_DIR/scripts/rc
-    source $SCRIPT_DIR/scripts/postprep.rc
+    source $SCRIPT_DIR/scripts/postprep.rc $ips_file
     echo && tput setaf 2 && bold "Finished deploying $TOKEN" && tput sgr0
-    echo "You may want to run:"
-    echo "./trainer cards $TOKEN > $TOKEN-cards.html"
+    echo "You may want to run one of the following commands:"
+    echo "trainer pull-images $TOKEN"
+    echo "trainer cards $TOKEN"
+}
+
+pull_tag(){
+    TOKEN=$1
+    need_tag $TOKEN
+    link_tag $TOKEN
+    ips_file=$SCRIPT_DIR/ips.txt
+    if [ ! -s $IPS_FILE ]; then
+        echo "Nonexistent or empty IPs file $IPS_FILE"
+    fi
+
+    # source $SCRIPT_DIR/scripts/postprep-pull.rc $ips_file
+    # cat $SCRIPT_DIR/scripts/postprep-pull.rc | pssh -I tee /tmp/postprep-pull.rc
+    # Pre-pull a bunch of images
+    pssh --timeout 600 'for I in \
+            debian:latest \
+            ubuntu:latest \
+            fedora:latest \
+            centos:latest \
+            postgres \
+            redis \
+            training/namer \
+            nathanleclaire/redisonrails; do
+        sudo -u docker docker pull $I
+    done'
+
+    #pssh --timeout 600 --send-input "bash /tmp/postprep-pull.rc >>/tmp/pp.out 2>>/tmp/pp.err" < $ips_file
+
+    echo && tput setaf 2 && bold "Finished pulling images for $TOKEN" && tput sgr0
+
+    echo "You may now want to run:"
+    echo "trainer cards $TOKEN > $TOKEN-cards.html"
 }
 
 test_tag(){
@@ -249,6 +316,18 @@ get_ami() {
     echo $AMI
 }
 
+get_instances_by_token() {
+    aws ec2 describe-instances --output table \
+                --filter "Name=tag:Name,Values=$TOKEN" \
+                --query "Reservations[*].Instances[*].[ \
+                    InstanceId, \
+                    State.Name, \
+                    Tags[0].Value, \
+                    PublicIpAddress, \
+                    InstanceType \
+                    ]"
+}
+
 get_instance_ips_by_tag(){
     aws ec2 describe-instances \
         --output text \
@@ -301,6 +380,7 @@ print_tags(){
         | uniq -c
 }
 
+
 need_tag(){
     TAG=$1
     if [ -z "$TAG" ]; then
@@ -315,10 +395,17 @@ make_tag(){
     TAG=$1
     (
         cd $SCRIPT_DIR
-        python scripts/ips-txt-to-html.py > /tmp/ips.html
-        cp /tmp/ips.html tags/$TAG/ips.html
+        source settings.txt
+        python scripts/ips-txt-to-html.py > tags/$TAG/ips.html
+        ln -sf tags/$TAG/ips.html ips.html
         link_tag $TAG
+        echo "Cards created. You may want to run:"
+        echo "chromium ips.html"
     )
+}
+
+get_active_workshop() {
+    cat $SCRIPT_DIR/01_active-workshop
 }
 
 need_workshop() {
@@ -339,6 +426,144 @@ need_workshop() {
         ls -d1 ./*/ | cut -d"/" -f2 | egrep -v "^[0-9]_"
         exit 1
     )
+}
+
+activate_workshop() {
+    workshop=$1
+    (
+        cd $SCRIPT_DIR
+        ln -sf workshops/$workshop/settings.txt settings.txt
+        echo "$workshop" > 01_active-workshop
+        echo "Activated workshop $workshop."
+        source settings.txt
+    )
+}
+
+activate_tag() {
+    TOKEN=$1
+    (
+        cd $SCRIPT_DIR
+
+        # If 02_active-tag exists and has a size greater than zero, archive it
+        if [[ -s 02_active-tag ]]; then
+
+            OLD_TOKEN=$(cat 02_active-tag)
+
+            if [ $(tag_is_active $TOKEN) ]; then
+                echo "$TOKEN is already active."
+            else
+                echo "Deactivating $OLD_TOKEN"
+                unlink_tag $OLD_TOKEN
+                echo "$OLD_TOKEN deactivated."
+            fi
+        else
+            echo "Activating $TOKEN"
+            echo $TOKEN > 02_active-tag
+            cat $TOKEN/01_workshop > 01_active-workshop
+            link_tag $TOKEN
+            echo "$TOKEN ($(cat 01_active-workshop)) activated."
+        fi
+    )
+}
+
+describe_tag() {
+    TOKEN=$1
+    if [ -z $TOKEN ]; then
+        die "No tag provided"
+    fi
+    (
+        cd $SCRIPT_DIR
+        echo "============= Tag: $TOKEN ============="
+        if [ $(tag_is_active $TOKEN) ]; then
+            echo "Status: Active"
+        else
+            echo "Status: Inactive"
+        fi
+
+        echo "Workshop: $(cat $TOKEN/01_workshop)"
+
+        echo "Instances: "
+
+        echo "[#] [Status]" | awk '{ printf " %7s %12s \n", $1, $2}'
+        aws ec2 describe-instances \
+            --filter "Name=tag:Name,Values=[$TOKEN]" \
+            --query "Reservations[*].Instances[*].[State]" \
+            | awk '{ printf "% 13s\n", $2}' \
+            | sort \
+            | uniq -c
+        )
+}
+
+active_workshop_is_healthy() {
+    WORKSHOP=$1
+    (
+        cd $SCRIPT_DIR
+        if [ ! -f $(readlink settings.txt) ]; then
+            echo "settings.txt is not a link"
+        fi
+
+        if [ ! -L settings.txt ]; then
+            echo "Missing settings.txt"
+        fi
+
+        # FIXME: check workshop directory exists
+        cd workshops/$WORKSHOP
+
+        if [ ! $(workshop_is_active) ]; then
+            echo "Workshop is not active"
+        fi
+    )
+}
+
+describe_workshop() {
+    WORKSHOP=$1
+    (
+        cd $SCRIPT_DIR
+
+        # echo "" > 01_active-workshop
+        # rm -f settings.txt
+        # msg="No workshop active. You may want to run: \n"
+        # msg=$msg"- trainer create WORKSHOP \n"
+        # msg=$msg"- trainer activate WORKSHOP"
+        # echo -e "$msg"
+
+        echo "======= Workshop: $WORKSHOP ======="
+        #ACTIVE_WORKSHOP=$(cat 01_active-workshop)
+        if [ $(workshop_is_active $WORKSHOP) ]; then
+            echo "Status: Active"
+        else
+            echo "Status: Inactive"
+        fi
+
+        source workshops/$WORKSHOP/settings.txt
+
+        for item in \
+                    WORKSHOP_SHORT_NAME \
+                    WORKSHOP_NAME \
+                    REPO_REMOTE \
+                    CLUSTER_SIZE \
+                    PAGE_SIZE \
+                    SLIDES_URL \
+                    SLIDES_COMMAND \
+                    SLIDES_COMMAND_PATH \
+                ; do
+            echo "  $item: ${!item}"
+        done
+    )
+}
+kill_instances() {
+    IDS=$(get_instance_ids_by_tag $TOKEN)
+    if [ -z "$IDS" ]; then
+        die "Invalid tag."
+    else
+        echo "Deleting instances with tag $TOKEN."
+    fi
+
+    echo "$IDS" \
+        | xargs -r aws ec2 terminate-instances --instance-ids \
+        | grep ^TERMINATINGINSTANCES
+
+    unlink_tag $TOKEN
 }
 
 check_envvars
@@ -365,6 +590,21 @@ cards)
     echo "Generating cards for $TOKEN..."
     make_tag $TOKEN
     ;;
+create-workshop)
+    WORKSHOP_NAME=$2
+    if [ -z $WORKSHOP_NAME ]; then
+        die "Please specify a name for this workshop (no spaces, doesn't start with a digit)."
+    fi
+
+    (
+        cd $SCRIPT_DIR
+        mkdir -p workshops/$WORKSHOP_NAME
+        cp -ir workshops/0_new-workshop/* \
+               --target-directory=workshops/$WORKSHOP_NAME
+        echo "Created workshop $WORKSHOP_NAME."
+        activate_workshop $WORKSHOP_NAME
+    )
+    ;;
 deploy)
     TOKEN=$2
     need_tag $TOKEN
@@ -372,11 +612,6 @@ deploy)
     ;;
 env)
     env  # Print this container's environment variables
-    ;;
-limits)
-    greet
-    max_instances=$(aws ec2 describe-account-attributes --attribute-names max-instances --query 'AccountAttributes[*][AttributeValues]')
-    echo "Max instances: $max_instances"
     ;;
 opensg)
     ec2-authorize -P tcp -p -1 default
@@ -386,7 +621,7 @@ opensg)
 start)
     # Create $2 instances for workshop $3
     COUNT=$2
-    WORKSHOP=$3
+    WORKSHOP=$(get_active_workshop)
 
     if [ -z "$COUNT" ]
     then
@@ -455,10 +690,8 @@ start)
     echo "[--------------------------------------------------------------------------------------------]"
     tput sgr0
 
-    deploy_tag $TOKEN
-    echo "You may want to now run one of the following commands:"
-    echo "trainer test $TOKEN"
-    echo "trainer stop $TOKEN"
+    echo "You may want to now run the following command:"
+    echo "trainer deploy $TOKEN"
     ;;
 ids)
     TOKEN=$2
@@ -482,17 +715,6 @@ list)
     echo "Using region $AWS_DEFAULT_REGION."
     TOKEN=$2
     need_tag $TOKEN
-    get_instances_by_token() {
-        aws ec2 describe-instances --output table \
-                    --filter "Name=tag:Name,Values=$TOKEN" \
-                    --query "Reservations[*].Instances[*].[ \
-                        InstanceId, \
-                        State.Name, \
-                        Tags[0].Value, \
-                        PublicIpAddress, \
-                        InstanceType \
-                        ]"
-    }
     result=$(get_instances_by_token $TOKEN)
     if [[ -z $result ]]; then
         echo "No instances found with tag $TOKEN in region $AWS_DEFAULT_REGION."
@@ -508,6 +730,11 @@ list)
     #aws ec2 describe-instances --output text \
     #    --filter "Name=tag:Name,Values=2016-03-03-18-48-aj" \
     #    --query "Reservations[*].Instances[*].{PublicIpAddress:PublicIpAddress,State:State}" 
+    ;;
+pull-images)
+    TOKEN=$2
+    need_tag $TOKEN
+    pull_tag $TOKEN
     ;;
 regions)
     # Print list of AWS EC2 regions, highlighting ours ($AWS_DEFAULT_REGION) in the list
@@ -537,21 +764,36 @@ ssh)
     cmd=$*
     ssh -q -o "StrictHostKeyChecking=no" $user@$ip "$cmd"
     ;;
+status)
+    TOKEN=$2
+    greet
+
+    echo "Region: $AWS_DEFAULT_REGION."
+    max_instances=$(aws ec2 describe-account-attributes \
+                    --attribute-names max-instances \
+                    --query 'AccountAttributes[*][AttributeValues]')
+    echo "Max instances: $max_instances"
+    echo
+
+    (
+        cd $SCRIPT_DIR
+        active_workshop=$(touch 01_active-workshop && cat 01_active-workshop)
+        describe_workshop $active_workshop
+        echo
+
+        if [ -z $TOKEN ]; then
+            active_tag=$(touch 02_active-tag && cat 02_active-tag)
+            describe_tag $active_tag
+        else
+            describe_tag $TOKEN
+        fi
+
+    )
+    ;;
 stop)
     TOKEN=$2
     need_tag $TOKEN
-    IDS=$(get_instance_ids_by_tag $TOKEN)
-    if [ -z "$IDS" ]; then
-        die "Invalid tag."
-    else
-        echo "Deleting instances with tag $TOKEN."
-    fi
-
-    echo "$IDS" \
-        | xargs -r aws ec2 terminate-instances --instance-ids \
-        | grep ^TERMINATINGINSTANCES
-
-    unlink_tag $TOKEN
+    kill_instances $TOKEN
     ;;
 tags)
     print_tags
@@ -566,8 +808,7 @@ tokens)
             --query 'Reservations[*].Instances[*].[ClientToken]' \
         | sort -u
     ;;
-
-workshop)
+activate-workshop)
     # set active workshop
     workshop=$2
     need_workshop $workshop
@@ -578,20 +819,9 @@ workshop)
         bold "$workshop is already the active workshop."
         source settings.txt
     else
-        ln -sf workshops/$workshop/settings.txt settings.txt
-        echo "$workshop" > 01_active-workshop
-        echo "Activated workshop $workshop."
-        source settings.txt
+        activate_workshop $workshop
     fi
-    for item in WORKSHOP_NAME \
-                WORKSHOP_SHORT_NAME \
-                CLUSTER_SIZE \
-                PAGE_SIZE \
-                SLIDES_URL \
-                CARD_TEXT \
-            ; do
-        echo "  $item: ${!item}"
-    done
+    describe_workshop $workshop
     exit
 
     echo "$WORKSHOP_NAME, aka $WORKSHOP_SHORT_NAME"
@@ -604,24 +834,10 @@ workshop)
     echo "--------------------------------------------------------"
     echo "To change the above information, see ./settings.txt."
     ;;
-activate)
+activate-tag)
     TOKEN=$2
     need_tag $TOKEN
-    (
-        cd $SCRIPT_DIR
-        if [[ -f 01_active-tag ]]; then
-            OLD_TOKEN=$(cat 01_active-tag)
-            OLD_WORKSHOP=$(cat 02_active-workshop)
-            echo "Deactivating $OLD_TOKEN"
-            unlink_tag $OLD_TOKEN
-            echo "$OLD_TOKEN deactivated."
-        fi
-
-        echo "Activating $TOKEN"
-        echo $TOKEN > 01_active-workshop
-        link_tag $TOKEN
-        echo "$TOKEN activated."
-    )
+    activate_tag $TOKEN
     ;;
 deactivate)
     TOKEN=$2
@@ -632,28 +848,32 @@ deactivate)
     ;;
 *)
     echo "$0 COMMAND [n-instances|token|workshop|...]
-        Commands:
-           *activate TAG    Activate an existing tag (symlink relevant files in base dir)
-                                - ips.txt
-                                - ips.html
-                                - settings.txt
-            ami             Look up Amazon Machine Images
-            aws             Wrapper for AWS CLI
-            env             Print this container's environment variables
-           *deploy  TAG     Deploy all instances with a given tag
-           *ips     TAG     List all IPs of instances with a given tag
-            ids     TAG     List all instance IDs with a given tag
-            limits          Print AWS max-instances
-            opensg          Modify AWS security groups
-            regions         Print list of AWS regions
-            scrape-slides PATH  Attempt to extract commands from slides
-            shell           Get a shell in the trainer container
-            ssh     TAG     SSH to one of the instances tagged TAG
-           *start   n       Start n instances
-           *stop    TAG     Stop and delete instances tagged TAG
-            tags            List all tags (per-region)
-            tokens          List all client tokens (per-region; will usually be the same as tags)
-            workshop NAME   Activate (symlink relevant files for) a given workshop in workshops/"
+    Commands:
+        activate-tag TAG
+                        Activate an existing tag (symlink relevant files in base dir)
+                            - ips.txt
+                            - ips.html
+        activate-workshop WORKSHOP
+                        Activate a workshop:
+                            - settings.txt
+        ami             Look up Amazon Machine Images
+        aws             Wrapper for AWS CLI
+        env             Print this container's environment variables
+        deploy  TAG     Deploy all instances with a given tag
+        ips     TAG     List all IPs of instances with a given tag
+        ids     TAG     List all instance IDs with a given tag
+        limits          Print AWS max-instances
+        opensg          Modify AWS security groups
+        regions         Print list of AWS regions
+        scrape-slides PATH
+                        Attempt to extract commands from slides
+        shell           Get a shell in the trainer container
+        ssh     TAG     SSH to one of the instances tagged TAG
+        start   n       Start n instances
+        stop    TAG     Stop and delete instances tagged TAG
+        tags            List all tags (per-region)
+        tokens          List all client tokens (per-region; will usually be the same as tags)
+        workshop NAME   Activate (symlink relevant files for) a given workshop in workshops/"
     ;;
 esac
 

@@ -1,5 +1,15 @@
 # Trainer tools for Docker workshops
 
+## TL;DR
+
+Summary of steps to launch a batch of instances for a workshop:
+
+* `source AWS_ECS_CREDENTIALS` to export the environment variables needed by the AWS CLI
+* `trainer start NUMBER_OF_VMS` to create AWS instances
+* `trainer deploy TAG` to run `scripts/postprep.rc` via parallel-ssh
+* `trainer pull-images TAG` to pre-pull a bunch of Docker images 
+* `trainer cards TAG` to generate an HTML file you can print to PDF
+
 ## Getting started
 
 Clone this repo to your machine:
@@ -19,16 +29,28 @@ Currently, it is not possible to specify a custom tag.
 
 ## Usage
 
-You can create a symlink in your path for this script:
+Tip: You can create a symlink in your path for this script:
 
   ln -s $PWD/trainer $HOME/bin/trainer
 
-But note that the script is not smart enough to know its real directory,
-so only use the symlink there!
+### Create a new workshop
+
+  trainer create-workshop WORKSHOP_NAME
+
+Replace `WORKSHOP_NAME` with a simple, unique nickname for this workshop (no spaces, and should not start with a digit).
+
+This will copy the template directory.
+
+### Activate a workshop
+
+  trainer activate WORKSHOP_NAME
+
+This will symlink workshops/WORKSHOP_NAME/settings.txt to the base directory, where `trainer` will source it.
+Not fully implemented.
 
 ### Start some VMs
 
-    $ ./trainer start 10
+    $ trainer start 10
 
 A few things will happen:
 
@@ -97,3 +119,7 @@ Allow running a symlink to ./trainer from any working directory.
 Allow configuration of the VMs based on the workshop you're administering. 
 
 Current behavior: defaults to postprep.rc
+
+### settings
+
+Use JSON instead of shell

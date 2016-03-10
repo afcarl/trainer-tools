@@ -12,12 +12,17 @@ CLUSTER_SIZE = 5
 
 # This script will be run as ubuntu user.
 # it's fine until we get to docker ps or whatever, we'll have to use sudo because the ubuntu user has no access to the docker socket.
+# TODO: 
+# - take out docker image pulls
+# instructions: start vms, deploy, pull
 
 import os
 import sys
+import time
 import urllib
 
 STEP = 0
+START = time.time()
 
 def bold(msg):
     return "{} {} {}".format("$(tput smso)", msg, "$(tput rmso)")
@@ -25,11 +30,14 @@ def bold(msg):
 def system(cmd):
     global STEP
     with open("/tmp/pp.status", "a") as f:
+        t1 = time.time()
         f.write(bold("--- RUNNING [step {}] ---> {}...".format(STEP, cmd)))
         retcode = os.system(cmd)
         if retcode:
             retcode = bold(retcode)
-        f.write("[{}]\n".format(retcode))
+        t2 = time.time()
+        td = str(t2-t1)[:5]
+        f.write("[{}] in {}s\n".format(retcode, td))
         STEP += 1
     with open("/home/ubuntu/.bash_history", "a") as f:
         f.write("{}\n".format(cmd))
@@ -95,19 +103,6 @@ os.system("sudo chmod +x /usr/local/bin/docker-machine*")
 # If we don't do this, Docker will not be responsive during the next step.
 system("while ! sudo -u docker docker version ; do sleep 2; done")
 
-# Pre-pull a bunch of images
-for I in [
-        "debian:latest",
-        "ubuntu:latest",
-        "fedora:latest",
-        "centos:latest",
-        "postgres",
-        "redis",
-        "training/namer",
-        "nathanleclaire/redisonrails"
-        ]:
-    system("sudo -u docker docker pull {}".format(I))
-
 system("sudo apt-get remove -y --purge dnsmasq-base")
 system("sudo apt-get -qy install python-setuptools pssh apache2-utils httping htop unzip")
 
@@ -146,12 +141,21 @@ while addresses:
         # If I'm node1 and don't have a private key, generate one (with empty passphrase)
         system("sudo -u docker [ -f /home/docker/.ssh/id_rsa ] || sudo -u docker ssh-keygen -t rsa -f /home/docker/.ssh/id_rsa -P ''")
 
+FINISH = time.time()
+duration = "Initial deployment took {}s".format(str(FINISH - START)[:5])
+system("echo {}".format(duration))
+
 EOF
+
+IPS_FILE=$1
+if [ ! -s $IPS_FILE ]; then
+    echo "Nonexistent or empty IPs file $IPS_FILE"
+fi
 
 # then you test that by pssh'ing into a 5 node cluster to see what happens
 # and when you test, you pass -i to pssh so you can see the output
 
-pssh --timeout 600 --send-input "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/pp.err" < $SCRIPT_PATH/ips.txt
+pssh --timeout 600 --send-input "python /tmp/postprep.py >>/tmp/pp.out 2>>/tmp/pp.err" < $IPS_FILE
 
 # If /home/docker/.ssh/id_rsa doesn't exist, copy it from node1
 pssh "sudo -u docker [ -f /home/docker/.ssh/id_rsa ] || ssh -o StrictHostKeyChecking=no node1 sudo -u docker tar -C /home/docker -cvf- .ssh | sudo -u docker tar -C /home/docker -xf-"
@@ -160,3 +164,4 @@ pssh "sudo -u docker [ -f /home/docker/.ssh/id_rsa ] || ssh -o StrictHostKeyChec
 pssh "grep docker@ /home/docker/.ssh/authorized_keys \
     || cat /home/docker/.ssh/id_rsa.pub \
         | sudo -u docker tee -a /home/docker/.ssh/authorized_keys"
+
