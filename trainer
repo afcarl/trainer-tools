@@ -1,6 +1,9 @@
-#!/bin/sh
-#export SCRIPT_PATH=$(dirname $(readlink --canonicalize $0))
-export SCRIPT_PATH=$(dirname $(readlink $0))
+#!/bin/bash
+if [[ -L $0 ]]; then
+    export SCRIPT_DIR=$(dirname $(readlink $0))
+else
+    export SCRIPT_DIR=$(dirname $(readlink -f $0))
+fi
 
 docker run --rm -ti \
     --name trainer \
@@ -13,10 +16,10 @@ docker run --rm -ti \
     -e AWS_SESSION_TOKEN \
     -e USER \
     -e SSH_AUTH_SOCK \
-    -e SCRIPT_PATH=/trainer-tools \
-    -e LOCAL_PATH=$SCRIPT_PATH \
+    -e SCRIPT_DIR=/trainer-tools \
+    -e LOCAL_PATH=$SCRIPT_DIR \
     -v `pwd`:/workdir \
-    -v $SCRIPT_PATH:/trainer-tools/ \
+    -v $SCRIPT_DIR:/trainer-tools/ \
     -v $(dirname $SSH_AUTH_SOCK):$(dirname $SSH_AUTH_SOCK) \
     -w /workdir \
     --entrypoint "/trainer-tools/scripts/trainer-cli" \

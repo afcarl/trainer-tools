@@ -1,13 +1,19 @@
 # Trainer tools for Docker workshops
 
-## Requirements
+## Getting started
+
+Clone this repo to your machine:
+
+  `git clone https://github.com/soulshake/trainer-tools.git`
+
+
+### Requirements
 
 Required environment variables:
 
 * `AWS_ACCESS_KEY_ID`
 * `AWS_SECRET_ACCESS_KEY`
 * `AWS_DEFAULT_REGION`
-
 
 Currently, it is not possible to specify a custom tag.
 

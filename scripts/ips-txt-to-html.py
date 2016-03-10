@@ -27,7 +27,7 @@ SETTINGS_ADVANCED = dict(
     "http://container.training/</p>"
     )
 
-SETTINGS = SETTINGS_ADVANCED
+SETTINGS = SETTINGS_BASIC
 
 globals().update(SETTINGS)
 
@@ -44,7 +44,7 @@ while ips:
     ips = ips[clustersize:]
     clusters.append(cluster)
 
-html = open("ips.html", "w")
+html = open("/tmp/ips.html", "w")
 html.write("<html><head><style>")
 html.write("""
 div { 
@@ -81,4 +81,7 @@ for i, cluster in enumerate(clusters):
     html.write(footer)
     html.write("</div>")
 html.close()
+with open("/tmp/ips.html") as f:
+    print(f.read())
+
 
