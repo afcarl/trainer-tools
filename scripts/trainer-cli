@@ -42,7 +42,6 @@ cd $SCRIPT_DIR
         ssh-add -L | pssh --send-input \
             "sudo mkdir -p /root/.ssh; sudo tee /root/.ssh/authorized_keys"
 
-        #"mkdir -p .ssh; tee .ssh/authorized_keys"
     }
 
     die () {
@@ -53,7 +52,6 @@ cd $SCRIPT_DIR
     }
 
     greet() {
-        #hello=$(aws iam get-user --output text | cut -f7)
         hello=$(aws iam get-user --query 'User.UserName')
         echo "Greetings, $hello!"
     }
@@ -73,69 +71,9 @@ cd $SCRIPT_DIR
         echo "$(tput setaf 3)$1$(tput sgr0)"
     }
 
-    link_tag() {
-        # create a directory for this tag,
-        # fetch IPs and write them to ips.txt
-        # create a symlink for ips.txt
-        # if cards have been generated, link those too
-        TOKEN=$1
-        mkdir -p tags/$TOKEN
-        # cat 01_active-workshop > tags/$TOKEN/01_workshop
-        # cat 02_active-tag > tags/$TOKEN/02_tag
-        get_instance_ips_by_tag $TOKEN > tags/$TOKEN/ips.txt
-        ln -sf tags/$TOKEN ./$TOKEN
-        ln -sf tags/$TOKEN/ips.txt ips.txt
-        echo "IPs: $LOCAL_PATH/ips.txt "
-        ln -sf tags/$TOKEN/ips.html ips.html
-        echo "Cards: $LOCAL_PATH/ips.html"
-    }
-
-    workshop_is_active(){
-        WORKSHOP=$1
-        if [ ! -s 01_active-workshop ]; then
-            return 0
-        fi
-        ACTIVE_WORKSHOP=$(get_active_workshop)
-        if [[ $ACTIVE_WORKSHOP == $WORKSHOP ]]; then
-            echo 1
-        else
-            echo 0
-        fi
-    }
-
-    tag_is_active(){
-        TOKEN=$1
-        ACTIVE_TOKEN=$(cat 02_active-tag)
-        if [[ $ACTIVE_TOKEN == $TOKEN ]]; then
-            echo 1
-        else
-            echo 0
-        fi
-    }
-
-    unlink_tag() {
-        # remove symlinks, and append -stopped to the directory we created
-        TOKEN=$1
-        if [ $(tag_is_active $TOKEN) ]; then
-            for f in ips.txt ips.html $TOKEN; do
-                if [ -L "$f" ]; then
-                    rm $f
-                fi
-            done
-
-            echo "" > 02_active-tag
-        else
-            echo "$TOKEN is not active; not unlinking."
-        fi
-
-        mv tags/$TOKEN tags/$TOKEN-stopped
-        ln -s tags/$TOKEN-stopped $TOKEN-stopped
-    }
-
     deploy_tag(){
         TOKEN=$1
         need_tag $TOKEN
-        link_tag $TOKEN
         ips_file=ips.txt
 
         # wait until we can at least run a simple command on the host via SSH before trying to deploy
@@ -247,12 +185,6 @@ cd $SCRIPT_DIR
                 die "Please export $envvar environment variable."
             fi
         done
-
-        for f in {01_active-workshop,02_active-tag}; do
-            if [ ! -e $f ]; then
-                touch $f
-            fi
-        done
     }
 
     sync_keys() {
@@ -288,7 +220,7 @@ cd $SCRIPT_DIR
         fi
     }
 
-    suggest_amis(){
+    suggest_amis() {
         suggested_ami=$(scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
         echo "$suggested_ami"
     }
@@ -331,7 +263,7 @@ cd $SCRIPT_DIR
                         ]"
     }
 
-    get_instance_ips_by_tag(){
+    get_instance_ips_by_tag() {
         aws ec2 describe-instances \
             --output text \
             --filter "Name=tag:Name,Values=$1" \
@@ -343,18 +275,18 @@ cd $SCRIPT_DIR
             # AJ: ? That doesn't work for me
     }
 
-    get_instance_ids_by_tag(){
+    get_instance_ids_by_tag() {
         IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$1" | grep ^INSTANCE | awk '{print $8}')
         echo "$IDS"
     }
 
-    get_instance_ids_by_client_token(){
+    get_instance_ids_by_client_token() {
         IDS=$(aws ec2 describe-instances --filters "Name=client-token,Values=$1" | grep ^INSTANCES | awk '{print $8}'
     )
         echo "$IDS"
     }
 
-    list_tags(){
+    list_tags() {
         #tags=$(aws ec2 describe-tags \
         #    --filters "Name=key,Values=Name" \
         #    --query 'Tags[*].Value[]' \
@@ -405,96 +337,15 @@ cd $SCRIPT_DIR
         echo "chromium ips.html"
     }
 
-    get_active_workshop() {
-        touch 01_active-workshop
-        cat 01_active-workshop
-    }
-
-    source_active_workshop() {
-        source settings.txt
-
-        for item in \
-                    WORKSHOP_SHORT_NAME \
-                    WORKSHOP_NAME \
-                    REPO_REMOTE \
-                    CLUSTER_SIZE \
-                    PAGE_SIZE \
-                    SLIDES_URL \
-                    SLIDES_COMMAND \
-                    SLIDES_COMMAND_PATH \
-                ; do
-            export $item=${!item}
-        done
-    }
-
-    need_workshop() {
-        (
-            cd workshops
-
-            if [ -z $workshop ]; then
-                echo -n "Please specify a workshop. "
-            elif [ ! -d $workshop ]; then
-                echo -n "$workshop doesn't exist. "
-            elif [ ! -f $workshop/settings.txt ]; then
-                die "workshops/$workshop/settings.txt doesn't exist. See README for instructions."
-            else
-                return 0
-            fi
-
-            echo "Try one of these?:"
-            ls -d1 ./*/ | cut -d"/" -f2 | egrep -v "^[0-9]_"
-            exit 1
-        )
-    }
-
-    activate_workshop() {
-        workshop=$1
-        ln -sf workshops/$workshop/settings.txt settings.txt
-        echo "$workshop" > 01_active-workshop
-        echo "Activated workshop $workshop."
-        source settings.txt
-    }
-
-    activate_tag() {
-        TOKEN=$1
-
-        # If 02_active-tag exists and has a size greater than zero, archive it
-        if [[ -s 02_active-tag ]]; then
-
-            OLD_TOKEN=$(cat 02_active-tag)
-
-            if [ $(tag_is_active $TOKEN) ]; then
-                echo "$TOKEN is already active."
-            else
-                echo "Deactivating $OLD_TOKEN"
-                unlink_tag $OLD_TOKEN
-                echo "$OLD_TOKEN deactivated."
-            fi
-        fi
-        echo "Activating $TOKEN"
-        echo $TOKEN > 02_active-tag
-        # cat $TOKEN/01_workshop > 01_active-workshop
-        link_tag $TOKEN
-        echo "$TOKEN activated."
-    }
-
     describe_tag() {
         TOKEN=$1
-        if [ -z $TOKEN ]; then
-            die "No tag provided"
-        fi
+        need_tag $TOKEN
         echo "============= Tag: $TOKEN ============="
-        if [ $(tag_is_active $TOKEN) ]; then
-            echo "Status: Active"
-        else
-            echo "Status: Inactive"
-        fi
-
-        echo "Workshop: $(cat $TOKEN/01_workshop)"
 
         echo "Instances: "
 
         echo "[#] [Status]" | awk '{ printf " %7s %12s \n", $1, $2}'
+
         aws ec2 describe-instances \
             --filter "Name=tag:Name,Values=[$TOKEN]" \
             --query "Reservations[*].Instances[*].[State]" \
@@ -503,50 +354,9 @@ cd $SCRIPT_DIR
             | uniq -c
     }
 
-    active_workshop_is_healthy() {
-        WORKSHOP=$1
-        if [ ! -f $(readlink settings.txt) ]; then
-            echo "settings.txt is not a link"
-        fi
-
-        if [ ! -L settings.txt ]; then
-            echo "Missing settings.txt"
-        fi
-
-        # FIXME: check workshop directory exists
-        cd workshops/$WORKSHOP
-
-        if [ ! $(workshop_is_active) ]; then
-            echo "Workshop is not active"
-        fi
-    }
-
     describe_workshop() {
-        if [ -z $1 ]; then
-            WORKSHOP=$(get_active_workshop)
-        else
-            WORKSHOP=$1
-        fi
 
         echo "======= Workshop: $WORKSHOP ======="
-        if [ -z $WORKSHOP ]; then
-            msg=" /!\ No workshop active. You may want to run: \n"
-            msg=$msg"- trainer create WORKSHOP \n"
-            msg=$msg"- trainer activate WORKSHOP"
-            echo -e "$msg"
-            return 0
-        fi
-
-        # echo "" > 01_active-workshop
-        # rm -f settings.txt
-
-        if [ $(workshop_is_active $WORKSHOP) ]; then
-            echo "Status: Active"
-        else
-            echo "Status: Inactive"
-        fi
-
-        source workshops/$WORKSHOP/settings.txt
 
         for item in \
                     WORKSHOP_SHORT_NAME \
@@ -561,6 +371,7 @@ cd $SCRIPT_DIR
             echo "  $item: ${!item}"
         done
     }
+
     kill_instances() {
         IDS=$(get_instance_ids_by_tag $TOKEN)
         if [ -z "$IDS" ]; then
@@ -572,8 +383,6 @@ cd $SCRIPT_DIR
         echo "$IDS" \
             | xargs -r aws ec2 terminate-instances --instance-ids \
             | grep ^TERMINATINGINSTANCES
-
-        unlink_tag $TOKEN
     }
 
     check_envvars
@@ -599,128 +408,14 @@ cd $SCRIPT_DIR
         need_tag $TOKEN
         make_tag $TOKEN
         ;;
-    create-workshop)
-        WORKSHOP_NAME=$2
-        if [ -z $WORKSHOP_NAME ]; then
-            die "Please specify a name for this workshop (no spaces, doesn't start with a digit)."
-        fi
-
-        mkdir -p workshops/$WORKSHOP_NAME
-        cp -ir workshops/0_new-workshop/* \
-               --target-directory=workshops/$WORKSHOP_NAME
-        echo "Created workshop $WORKSHOP_NAME."
-        activate_workshop $WORKSHOP_NAME
-        ;;
     deploy)
         # TODO: increase parallelism
         TOKEN=$2
-        if [ -z $TOKEN ]; then
-            TOKEN=$(cat 02_active-tag)
-        fi
         need_tag $TOKEN
-        source_active_workshop
         deploy_tag $TOKEN
         ;;
     env)
-        source_active_workshop
         env  # Print this container's environment variables
-        ;;
-    opensg)
-        ec2-authorize -P tcp -p -1 default
-        ec2-authorize -P udp -p -1 default
-        ec2-authorize -P icmp -t -1:-1 default
-        ;;
-    start)
-        # Create $2 instances for workshop $3
-        COUNT=$2
-        WORKSHOP=$(get_active_workshop)
-        source_active_workshop
-
-        if [ -z "$COUNT" ]
-        then
-            echo "Indicate number of instances to start."
-            exit 1
-        fi
-
-        if [ -z "$WORKSHOP" ]; then
-            echo "Indicate workshop."
-            exit 1
-        fi
-
-        if [ ! -d workshops/$WORKSHOP ]; then
-            die "$LOCAL_PATH/workshops/$WORKSHOP doesn't exist."
-        fi
-
-        greet       # Print our AWS username, to ease the pain of credential-juggling
-        sync_keys   # Upload our SSH keys to AWS if needed, to be added to each VM's authorized_keys
-        AMI=$(get_ami)  # Retrieve the AWS image ID
-        TOKEN=$(get_token)  # generate a timestamp token for this batch of VMs
-
-        tput bold && tput setaf 5
-        echo "---------------------------"
-        echo "Starting $2 instances:"
-        echo "  Region: $AWS_DEFAULT_REGION"
-        echo "  Tag: $TOKEN"
-        echo "  AMI: $AMI"
-        echo "---------------------------"
-        tput sgr0
-
-        aws ec2 run-instances \
-            --key-name $AWS_KEY_NAME \
-            --count $2 \
-            --instance-type c3.large \
-            --client-token $TOKEN \
-            --image-id $AMI  \
-        | head -1
-        echo "---------------------------"
-
-        # if instance creation succeeded, we should have some IDs
-        IDS=$(get_instance_ids_by_client_token $TOKEN)
-        if [ -z "$IDS" ]; then
-            die "Instance creation failed."
-        fi
-
-        # Tag these new instances with a tag that is the same as the token
-        aws ec2 create-tags --tag Key=Name,Value=$TOKEN --resources $IDS >> /dev/null
-        echo $()
-
-        echo "[------------------------------ Waiting for creation ----------------------------------]"
-        # FIXME: instead of querying each instance to check if it has an association, make one call and make sure it has the right number
-        # IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$1" | grep ^INSTANCE | awk '{print $8}')
-        # see aws ec2 wait instance-exists / instance-running / instance-status-ok
-        for ID in $IDS; do
-            while ! aws ec2 describe-instances --filters "Name=instance-id,Values=$ID" \
-                | grep ^ASSOCIATION \
-                | head -1
-            do
-                sleep 3
-            done
-        done
-
-        tput setaf 2
-        echo "[--------------------------------------------------------------------------------------------]"
-        echo "        Successfully created $2 instances with tag: $(tput bold)$TOKEN $(tput sgr0)"
-        echo "[--------------------------------------------------------------------------------------------]"
-        tput sgr0
-
-        mkdir tags/$TOKEN
-        echo $TOKEN > 02_active-tag
-        echo "$TOKEN" > tags/$TOKEN/02_tag
-        IPS=$(get_instance_ips_by_tag $TOKEN)
-        echo "$IPS" > tags/$TOKEN/ips.txt
-        ln -s tags/$TOKEN/ips.txt ips.txt
-        echo "Activated tag $TOKEN."
-        WORKSHOP=$(get_active_workshop)
-        if [ -z $ACTIVE_WORKSHOP ]; then
-            describe_workshop $ACTIVE_WORKSHOP
-            echo "You may want to now run the following command:"
-            # echo "trainer deploy"
-            echo "trainer deploy $TOKEN"
-        else
-            echo "You may want to now run the following command:"
-            echo "trainer activate-workshop WORKSHOP_NAME"
-        fi
-            
         ;;
     ids)
         TOKEN=$2
@@ -760,6 +455,16 @@ cd $SCRIPT_DIR
         #    --filter "Name=tag:Name,Values=2016-03-03-18-48-aj" \
         #    --query "Reservations[*].Instances[*].{PublicIpAddress:PublicIpAddress,State:State}" 
         ;;
+    opensg)
+        ec2-authorize -P tcp -p -1 default
+        ec2-authorize -P udp -p -1 default
+        ec2-authorize -P icmp -t -1:-1 default
+        ;;
+    pssh)
+        user=ubuntu
+        shift
+        pssh --inline "$@"
+        ;;
     pull-images)
         TOKEN=$2
         need_tag $TOKEN
@@ -783,23 +488,77 @@ cd $SCRIPT_DIR
         export PS1="trainer@$AWS_DEFAULT_REGION# "
         exec $SHELL
         ;;
-    pssh)
-        user=ubuntu
-        shift
-        pssh --inline "$@"
-        ;;
     run)
         # Run arbitrary commands in the container
         # replaces aws) shell)
         shift
         bash -c "$@"
         ;;
-    ssh)
-        # execute arbitrary commands on one of the IPs in our active batch
-        user=docker
-        ip=$(tail -1 ips.txt)
-        shift
-        ssh -q -o "StrictHostKeyChecking=no" $user@$ip "$*"
+    start)
+        # Create $2 instances for workshop $3
+        COUNT=$2
+
+        if [ -z "$COUNT" ]
+        then
+            echo "Indicate number of instances to start."
+            exit 1
+        fi
+
+        greet       # Print our AWS username, to ease the pain of credential-juggling
+        sync_keys   # Upload our SSH keys to AWS if needed, to be added to each VM's authorized_keys
+        AMI=$(get_ami)  # Retrieve the AWS image ID
+        TOKEN=$(get_token)  # generate a timestamp token for this batch of VMs
+
+        tput bold && tput setaf 5
+        echo "---------------------------"
+        echo "Starting $2 instances:"
+        echo "  Region: $AWS_DEFAULT_REGION"
+        echo "  Tag: $TOKEN"
+        echo "  AMI: $AMI"
+        echo "---------------------------"
+        tput sgr0
+
+        aws ec2 run-instances \
+            --key-name $AWS_KEY_NAME \
+            --count $2 \
+            --instance-type c3.large \
+            --client-token $TOKEN \
+            --image-id $AMI  \
+        | head -1
+        echo "---------------------------"
+
+        # if instance creation succeeded, we should have some IDs
+        IDS=$(get_instance_ids_by_client_token $TOKEN)
+        if [ -z "$IDS" ]; then
+            die "Instance creation failed."
+        fi
+
+        # Tag these new instances with a tag that is the same as the token
+        aws ec2 create-tags --tag Key=Name,Value=$TOKEN --resources $IDS >> /dev/null
+
+        echo "[------------------------------ Waiting for creation ----------------------------------]"
+        # FIXME: instead of querying each instance to check if it has an association, make one call and make sure it has the right number
+        # IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$1" | grep ^INSTANCE | awk '{print $8}')
+        # see aws ec2 wait instance-exists / instance-running / instance-status-ok
+        for ID in $IDS; do
+            while ! aws ec2 describe-instances --filters "Name=instance-id,Values=$ID" \
+                | grep ^ASSOCIATION \
+                | head -1
+            do
+                sleep 3
+            done
+        done
+
+        tput setaf 2
+        echo "[--------------------------------------------------------------------------------------------]"
+        echo "        Successfully created $2 instances with tag: $(tput bold)$TOKEN $(tput sgr0)"
+        echo "[--------------------------------------------------------------------------------------------]"
+        tput sgr0
+
+        mkdir tags/$TOKEN
+        IPS=$(get_instance_ips_by_tag $TOKEN)
+        echo "$IPS" > tags/$TOKEN/ips.txt
+        ln -s tags/$TOKEN/ips.txt ips.txt
         ;;
     status)
         TOKEN=$2
@@ -812,15 +571,7 @@ cd $SCRIPT_DIR
         echo "Max instances: $max_instances"
         echo
 
-        WORKSHOP=$(get_active_workshop)
         describe_workshop $WORKSHOP
-        echo
-
-        if [ -z $TOKEN ]; then
-            describe_tag $(cat 02_active-tag)
-        else
-            describe_tag $TOKEN
-        fi
         ;;
     stop)
         TOKEN=$2
@@ -840,68 +591,29 @@ cd $SCRIPT_DIR
                 --query 'Reservations[*].Instances[*].[ClientToken]' \
             | sort -u
         ;;
-    activate-workshop)
-        # set active workshop
-        workshop=$2
-        need_workshop $workshop
-
-        if [[ $(readlink settings.txt) == workshops/$workshop/settings.txt \
-                && $(cat 01_active-workshop) == $workshop ]]; then
-            echo
-            bold "$workshop is already the active workshop."
-            source settings.txt
-        else
-            activate_workshop $workshop
-        fi
-        describe_workshop $workshop
-        TOKEN=$(cat 02_active-tag)
-        if [ -z $TOKEN ]; then
-            die "No active tag, could not activate workshop."
-        else
-            echo $workshop > tags/$TOKEN/01_workshop
-            echo $workshop > 01_active-workshop
-        fi
-        ;;
-    activate-tag)
-        TOKEN=$2
-        need_tag $TOKEN
-        activate_tag $TOKEN
-        ;;
-    deactivate)
-        TOKEN=$2
-        need_tag $TOKEN
-        unlink_tag $TOKEN
-        echo "" > 01_active-workshop
-        echo "$TOKEN deactivated."
-        ;;
     *)
         echo "$0 COMMAND [n-instances|token|workshop|...]
-        Commands:
-            activate-tag TAG
-                            Activate an existing tag (symlink relevant files in base dir)
-                                - ips.txt
-                                - ips.html
-            activate-workshop WORKSHOP
-                            Activate a workshop:
-                                - settings.txt
-            ami             Look up Amazon Machine Images
-            aws             Wrapper for AWS CLI
-            env             Print this container's environment variables
-            deploy  TAG     Deploy all instances with a given tag
-            ips     TAG     List all IPs of instances with a given tag
-            ids     TAG     List all instance IDs with a given tag
-            limits          Print AWS max-instances
-            opensg          Modify AWS security groups
-            regions         Print list of AWS regions
-            scrape-slides PATH
-                            Attempt to extract commands from slides
-            shell           Get a shell in the trainer container
-            ssh     TAG     SSH to one of the instances tagged TAG
-            start   n       Start n instances
-            stop    TAG     Stop and delete instances tagged TAG
-            tags            List all tags (per-region)
-            tokens          List all client tokens (per-region; will usually be the same as tags)
-            workshop NAME   Activate (symlink relevant files for) a given workshop in workshops/"
+    Commands:
+        ami                 Look up Amazon Machine Images
+        aws                 Wrapper for AWS CLI
+        env                 Print this container's environment variables
+        deploy  TAG         Deploy all instances with a given tag
+        ips     TAG         List all IPs of instances with a given tag
+        ids     TAG         List all instance IDs with a given tag
+        limits              Print AWS max-instances
+        list    [TAG]       If a tag is provided, list its VMs. Otherwise, list tags.
+        opensg              Modify AWS security groups
+        pssh    TAG         Execute a command via parallel-ssh on this tag's VMs
+        pull-images TAG     Pre-pull docker images. Run only after deploying.
+        regions             Print list of AWS regions
+        run     CMD         Run a command in the container
+        scrape-slides PATH  Attempt to extract commands from slides
+        shell               Get a shell in the trainer container
+        start   n           Start n instances
+        status  TAG         Print information about this tag and its VMs
+        stop    TAG         Stop and delete instances tagged TAG
+        tags                List all tags (per-region)
+        tokens              List all client tokens (per-region; will usually be the same as tags)"
         ;;
     esac
 

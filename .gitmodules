@@ -1,7 +1,0 @@
-[submodule "workshops/orchestration/orchestration-workshop"]
-	path = workshops/orchestration/orchestration-workshop
-	url = https://github.com/jpetazzo/orchestration-workshop
-[submodule "workshops/fundamentals/docker-fundamentals"]
-	path = workshops/fundamentals/docker-fundamentals
-	url = https://github.com/jpetazzo/docker-fundamentals.git
-	branch = workshop
