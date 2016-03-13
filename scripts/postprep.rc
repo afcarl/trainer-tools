@@ -1,25 +1,21 @@
 pssh -I tee /tmp/postprep.py <<EOF
 #!/usr/bin/env python
+import os
+import sys
+import time
+import urllib
 
 #################################
 
 COMPOSE_VERSION = "1.6.2"
-MACHINE_VERSION = "0.6.0"
-SWARM_VERSION = "1.1.3"
-CLUSTER_SIZE = 5
+MACHINE_VERSION = os.environ.get("MACHINE_VERSION") or "0.6.0"
+SWARM_VERSION = os.environ.get("SWARM_VERSION") or "1.1.3"
+CLUSTER_SIZE = os.environ.get("CLUSTER_SIZE") or 5
 
 #################################
 
 # This script will be run as ubuntu user.
 # it's fine until we get to docker ps or whatever, we'll have to use sudo because the ubuntu user has no access to the docker socket.
-# TODO: 
-# - take out docker image pulls
-# instructions: start vms, deploy, pull
-
-import os
-import sys
-import time
-import urllib
 
 STEP = 0
 START = time.time()
@@ -122,7 +118,6 @@ def makenames(addrs):
     return [ "node%s"%(i+1) for i in range(len(addrs)) ]
 
 while addresses:
-    print(addresses)
     cluster = addresses[:CLUSTER_SIZE]
     addresses = addresses[CLUSTER_SIZE:]
     if myaddr not in cluster:
@@ -131,6 +126,7 @@ while addresses:
     for ipaddr, name in zip(cluster, names):
         system("grep ^{} /etc/hosts || echo {} {} | sudo tee -a /etc/hosts"
                     .format(ipaddr, ipaddr, name))
+    print(cluster)
 
     mynode = cluster.index(myaddr) + 1
     system("echo 'node{}' | sudo -u docker tee /tmp/node".format(mynode))

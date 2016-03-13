@@ -1,15 +1,21 @@
 FROM soulshake/aws.cli:latest
 
+RUN apt-get update -y
+RUN apt-get upgrade -y
 RUN apt-get install -y \
     ssh \
     curl \
     jq \
     bsdmainutils \
     pssh \
-    python-pip
+    python-pip \
+    man \
+    wkhtmltopdf
 
-RUN curl --silent https://get.docker.com/ | sh
-RUN pip install -U docker-compose
+RUN pip install termcolor
+
+#RUN pip install -U docker-compose
 #COPY . /trainer-tools
 #WORKDIR /trainer-tools
 #ENTRYPOINT ["scripts/trainer-cli"]
+# bind-mount /var/run/docker.sock socket

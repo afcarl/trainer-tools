@@ -1,7 +1,7 @@
 #!/usr/bin/env python
+import os
 
-# FIXME: get settings from settings.txt symlink in basedir
-
+"""
 SETTINGS_BASIC = dict(
     clustersize=1,
     pagesize=15,
@@ -28,6 +28,21 @@ SETTINGS_ADVANCED = dict(
     )
 
 SETTINGS = SETTINGS_BASIC
+"""
+
+SETTINGS = dict(
+    clustersize=int(os.environ.get("CLUSTER_SIZE", "5")),
+    pagesize=int(os.environ.get("PAGE_SIZE", 12)),
+    backgroundimage=os.environ.get("BACKGROUND_IMAGE", "docker-nb.svg"),
+    blurb="<p>Here is the connection information to your very own "
+    "cluster for this Docker orchestration workshop. You can connect "
+    "to the VM using your SSH client.</p>\n"
+    "<p>Your VMs are reachable at the following addresses:</p>\n",
+    prettify=lambda l: [ "node%d: %s"%(i+1, s) 
+                         for (i, s) in zip(range(len(l)), l) ],
+    footer="<p>You can find the last version of the slides at "
+    "{}</p>".format(os.environ.get("SLIDES_URL", "http://container.training")),
+    )
 
 globals().update(SETTINGS)
 
@@ -35,6 +50,8 @@ globals().update(SETTINGS)
 
 ips = list(open("ips.txt"))
 
+print(len(ips))
+print(len(ips)%clustersize)
 assert len(ips)%clustersize == 0
 
 clusters = []
@@ -44,7 +61,7 @@ while ips:
     ips = ips[clustersize:]
     clusters.append(cluster)
 
-html = open("/tmp/ips.html", "w")
+html = open("ips.html", "w")
 html.write("<html><head><style>")
 html.write("""
 div { 
@@ -68,6 +85,7 @@ p {
     height: 8px;
 }
 """)
+
 html.write("</style></head><body>")
 for i, cluster in enumerate(clusters):
     if i>0 and i%pagesize==0:
@@ -81,7 +99,7 @@ for i, cluster in enumerate(clusters):
     html.write(footer)
     html.write("</div>")
 html.close()
-with open("/tmp/ips.html") as f:
+with open("ips.html") as f:
     print(f.read())
 
 
