@@ -3,15 +3,15 @@
 TRAINER_IMAGE="soulshake/trainer-tools"
 
 DEPENDENCIES="\
-    awscli \
-    ssh \
-    curl \
-    jq \
-    bsdmainutils \
-    pssh \
-    python-pip \
-    man \
-    wkhtmltopdf \
+    awscli
+    ssh
+    curl
+    jq
+    bsdmainutils
+    pssh
+    python-pip
+    man
+    wkhtmltopdf
     "
 
 ENVVARS="\
@@ -20,7 +20,7 @@ ENVVARS="\
     AWS_DEFAULT_REGION \
     "
 
-if [[ -L $0 ]]; then
+if [ -L $0 ]; then
     export SCRIPT_DIR=$(dirname $(readlink $0))
 else
     export SCRIPT_DIR=$(dirname $(readlink -f $0))
@@ -66,19 +66,18 @@ check_envvars() {
     return 0
 }
 
+show_missing_dependencies() {
+    for dependency in $DEPENDENCIES; do
+        type $dependency >/dev/null 2>&1 && echo "     $dependency: [OK]" \
+            || { echo >&2 "$(tput setaf 1)     $dependency: [NOK] $(tput sgr0)" ;}
+    done
+}
+
 dependencies_fulfilled() {
-    for dependency in \
-            ssh \
-            curl \
-            jq \
-            bsdmainutils \
-            pssh \
-            python-pip \
-            man \
-            wkhtmltopdf \
-            ; do
+    for dependency in $DEPENDENCIES ; do
         type $dependency >/dev/null 2>&1 \
             || return 1 ;
+            #|| show_missing_dependencies && return 1 ;
             #|| { echo >&2 "$dependency not installed. Running in a container."; return 1;}
             #|| { echo >&2 "I require $dependency but it's not installed."; }
     done
@@ -106,5 +105,5 @@ else
     echo "- run \`docker build -t soulshake/trainer-tools\`"
     echo "- run \`docker pull soulshake/trainer-tools\`"
     echo "- install all dependencies: "
-    for dep in $DEPENDENCIES; do echo "    $dep"; done
+    show_missing_dependencies
 fi
