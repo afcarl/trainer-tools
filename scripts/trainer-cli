@@ -9,384 +9,229 @@
 
 set -e  # if we encounter an error, abort
 
-# Run the whole thing in a subshell so trainer can be used as an alias from any directory
-(
-cd $SCRIPT_DIR
 
-    pssh () {
-        HOSTFILE="ips.txt"
+greet() {
+    hello=$(aws iam get-user --query 'User.UserName')
+    echo "Greetings, $hello!"
+}
 
-        [ -f $HOSTFILE ] || {
-            echo "No hostfile found at $HOSTFILE"
-            return
-        }
+deploy_tag(){
+    TOKEN=$1
+    need_tag $TOKEN
+    ips_file=ips.txt
 
-        echo "[parallel-ssh] $@"
+    # wait until we can at least run a simple command on the host via SSH before trying to deploy
+    echo -n "Waiting for initial contact."
+    ip=$(tail -1 ips.txt)
+    ack="\ $ip reporting for duty."
 
-        parallel-ssh -h $HOSTFILE -l ubuntu \
-        -O UserKnownHostsFile=/dev/null -O StrictHostKeyChecking=no \
-        -O ForwardAgent=yes \
-        "$@"
-    }
+    tput setaf 7
+    while ! ssh -q -o "StrictHostKeyChecking=no" ubuntu@$ip "echo $ack"; do
+        echo -n "."
+        sleep 2
+    done
+    tput sgr0
 
-    pcopykey () {
-        echo "Copying our key to ubuntu/.ssh/authorized_keys"
-        ssh-add -L | pssh --askpass --send-input \
-                "mkdir -p /home/ubuntu/.ssh; tee /home/ubuntu/.ssh/authorized_keys"
+    yellow "[[ Deploying tag $(tput bold)$TOKEN ]]$(tput sgr0)"
+    source scripts/postprep.rc $ips_file
+    echo && tput setaf 2 && bold "Finished deploying $TOKEN" && tput sgr0
+    echo "You may want to run one of the following commands:"
+    echo "trainer pull-images $TOKEN"
+    echo "trainer cards $TOKEN"
+}
 
-        echo "Copying our key to docker/.ssh/authorized_keys"
-        ssh-add -L | pssh --askpass --send-input \
-                "mkdir -p /home/docker/.ssh; tee /home/docker/.ssh/authorized_keys"
 
-        echo "Copying our key to /root/.ssh/authorized_keys"
-        ssh-add -L | pssh --send-input \
-            "sudo mkdir -p /root/.ssh; sudo tee /root/.ssh/authorized_keys"
+pull_tag(){
+    TOKEN=$1
+    need_tag $TOKEN
+    link_tag $TOKEN
+    cards_file=ips.html
+    if [ ! -s $IPS_FILE ]; then
+        echo "Nonexistent or empty IPs file $IPS_FILE"
+    fi
 
-    }
+    # Pre-pull a bunch of images
+    pssh --timeout 600 'for I in \
+            debian:latest \
+            ubuntu:latest \
+            fedora:latest \
+            centos:latest \
+            postgres \
+            redis \
+            training/namer \
+            nathanleclaire/redisonrails; do
+        sudo -u docker docker pull $I
+    done'
 
-    die () {
-        echo $(tput setaf 1)
-        echo -e "$1"
-        echo $(tput sgr0)
-        exit 1
-    }
+    #pssh --timeout 600 --send-input "bash /tmp/postprep-pull.rc >>/tmp/pp.out 2>>/tmp/pp.err" < $ips_file
 
-    greet() {
-        hello=$(aws iam get-user --query 'User.UserName')
-        echo "Greetings, $hello!"
-    }
+    echo && tput setaf 2 && bold "Finished pulling images for $TOKEN" && tput sgr0
 
-    bold() {
-        msg=$1
-        echo "$(tput bold)$1$(tput sgr0)"
-    }
+    echo "You may now want to run:"
+    echo "trainer cards $TOKEN > $TOKEN-cards.html"
+}
 
-    green() {
-        msg=$1
-        echo "$(tput setaf 2)$1$(tput sgr0)"
-    }
+test_tag(){
+    ips_file=tags/$TOKEN/ips.txt
+    yellow "Using random IP in $ips_file to run tests on $TOKEN"
+    ip=$(shuf -n 1 $ips_file)
+    test_vm $ip
+    echo "Tests complete. You may want to run one of the following commands:"
+    echo "trainer stop $TOKEN"
+    echo "trainer cards $TOKEN"
+}
 
-    yellow(){
-        msg=$1
-        echo "$(tput setaf 3)$1$(tput sgr0)"
-    }
+test_vm() {
+    ip=$1
+    yellow "[[ Testing instance with IP $(tput bold)$ip $(tput sgr0) ]]"
+    user=ubuntu
+    # do it as ubuntu user 
+    # sudo -u docker "docker ps"
 
-    deploy_tag(){
-        TOKEN=$1
-        need_tag $TOKEN
-        ips_file=ips.txt
+    for cmd in "hostname" \
+        "whoami" \
+        "hostname -i" \
+        "cat /tmp/node" \
+        "cat /tmp/ipv4" \
+        "cat /etc/hosts" \
+        "hostnamectl status" \
+        "docker version | grep Version -B1" \
+        "docker-compose version" \
+        "docker-machine version" \
+        "docker images" \
+        "docker ps" \
+        "which fig" \
+        "curl --silent localhost:55555" \
+        "sudo ls -la /mnt/ | grep docker" \
+        "env" \
+        "ls -la /home/docker/.ssh"; do
+        echo "=== $cmd ==="
+        echo "$cmd" | 
+            ssh -A -q \
+                -o "UserKnownHostsFile /dev/null" \
+                -o "StrictHostKeyChecking=no" \
+                $user@$ip sudo -u docker -i
+        echo
+    done
+}
 
-        # wait until we can at least run a simple command on the host via SSH before trying to deploy
-        echo -n "Waiting for initial contact."
-        ip=$(tail -1 ips.txt)
-        ack="\ $ip reporting for duty."
 
-        tput setaf 7
-        while ! ssh -q -o "StrictHostKeyChecking=no" ubuntu@$ip "echo $ack"; do
-            echo -n "."
-            sleep 2
-        done
-        tput sgr0
+sync_keys() {
+    # to test: 
+    # unset SSH_AUTH_SOCK
+    # eval $(ssh-agent) and run ssh-agent again
 
-        yellow "[[ Deploying tag $(tput bold)$TOKEN ]]$(tput sgr0)"
-        source scripts/postprep.rc $ips_file
-        echo && tput setaf 2 && bold "Finished deploying $TOKEN" && tput sgr0
-        echo "You may want to run one of the following commands:"
-        echo "trainer pull-images $TOKEN"
-        echo "trainer cards $TOKEN"
-    }
+    # make sure ssh-add -l contains "RSA"
+    ssh-add -l | grep -q RSA ||
+        die "The output of \`ssh-add -l\` doesn't contain 'RSA'. Start the agent, add your keys?"
 
-    push_ps1(){
-        pssh --timeout 600 --send-input "source /tmp/PS1 >>/tmp/pp.out 2>>/tmp/pp.err" < $ips_file
-        echo && tput setaf 2 && bold "Finished updating prompts for $TOKEN" && tput sgr0
-    }
+    SHORT_FINGERPRINT=$(ssh-add -l | grep RSA | head -n1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
+    AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
+    #echo "Checking for AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION..."
+    echo "Syncing keys."
+    if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME >> /dev/null; then
+        # FIXME: "A client error ..." still prints here. It shouldn't.
+        echo "No key named $AWS_KEY_NAME found in region $AWS_DEFAULT_REGION. Importing it."
+        aws ec2 import-key-pair --key-name $AWS_KEY_NAME \
+            --public-key-material "$(ssh-add -L \
+                                    | grep -i RSA \
+                                    | head -n1 \
+                                    | cut -d " " -f 1-2)" >> /dev/null
+        echo "Key pair imported with --key-name $AWS_KEY_NAME. Checking operation was successful..."
 
-    pull_tag(){
-        TOKEN=$1
-        need_tag $TOKEN
-        link_tag $TOKEN
-        cards_file=ips.html
-        if [ ! -s $IPS_FILE ]; then
-            echo "Nonexistent or empty IPs file $IPS_FILE"
-        fi
-
-        # Pre-pull a bunch of images
-        pssh --timeout 600 'for I in \
-                debian:latest \
-                ubuntu:latest \
-                fedora:latest \
-                centos:latest \
-                postgres \
-                redis \
-                training/namer \
-                nathanleclaire/redisonrails; do
-            sudo -u docker docker pull $I
-        done'
-
-        #pssh --timeout 600 --send-input "bash /tmp/postprep-pull.rc >>/tmp/pp.out 2>>/tmp/pp.err" < $ips_file
-
-        echo && tput setaf 2 && bold "Finished pulling images for $TOKEN" && tput sgr0
-
-        echo "You may now want to run:"
-        echo "trainer cards $TOKEN > $TOKEN-cards.html"
-    }
-
-    test_tag(){
-        ips_file=tags/$TOKEN/ips.txt
-        yellow "Using random IP in $ips_file to run tests on $TOKEN"
-        ip=$(shuf -n 1 $ips_file)
-        test_vm $ip
-        echo "Tests complete. You may want to run one of the following commands:"
-        echo "trainer stop $TOKEN"
-        echo "trainer cards $TOKEN"
-    }
-
-    test_vm() {
-        ip=$1
-        yellow "[[ Testing instance with IP $(tput bold)$ip $(tput sgr0) ]]"
-        user=ubuntu
-        # do it as ubuntu user 
-        # sudo -u docker "docker ps"
-
-        for cmd in "hostname" \
-            "whoami" \
-            "hostname -i" \
-            "cat /tmp/node" \
-            "cat /tmp/ipv4" \
-            "cat /etc/hosts" \
-            "hostnamectl status" \
-            "docker version | grep Version -B1" \
-            "docker-compose version" \
-            "docker-machine version" \
-            "docker images" \
-            "docker ps" \
-            "which fig" \
-            "curl --silent localhost:55555" \
-            "sudo ls -la /mnt/ | grep docker" \
-            "env" \
-            "ls -la /home/docker/.ssh"; do
-            echo "=== $cmd ==="
-            echo "$cmd" | 
-                ssh -A -q \
-                    -o "UserKnownHostsFile /dev/null" \
-                    -o "StrictHostKeyChecking=no" \
-                    $user@$ip sudo -u docker -i
-            echo
-        done
-    }
-
-    check_envvars() {
-        # This script expects plain text output from the AWS CLI in some places
-        export AWS_DEFAULT_OUTPUT=text
-
-        for envvar in {AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION}; do
-            if [ -z "$envvar" ]
-            then
-                die "Please export $envvar environment variable."
-            fi
-        done
-    }
-
-    sync_keys() {
-        # to test: 
-        # unset SSH_AUTH_SOCK
-        # eval $(ssh-agent) and run ssh-agent again
-
-        # make sure ssh-add -l contains "RSA"
-        ssh-add -l | grep -q RSA ||
-            die "The output of \`ssh-add -l\` doesn't contain 'RSA'. Start the agent, add your keys?"
-
-        SHORT_FINGERPRINT=$(ssh-add -l | grep RSA | head -n1 | cut -d " " -f 2 | tr -d : | cut -c 1-8)
-        AWS_KEY_NAME="${SHORT_FINGERPRINT}-${USER}"
-        #echo "Checking for AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION..."
-        echo "Syncing keys."
-        if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME >> /dev/null; then
-            # FIXME: "A client error ..." still prints here. It shouldn't.
-            echo "No key named $AWS_KEY_NAME found in region $AWS_DEFAULT_REGION. Importing it."
-            aws ec2 import-key-pair --key-name $AWS_KEY_NAME \
-                --public-key-material "$(ssh-add -L \
-                                        | grep -i RSA \
-                                        | head -n1 \
-                                        | cut -d " " -f 1-2)" >> /dev/null
-            echo "Key pair imported with --key-name $AWS_KEY_NAME. Checking operation was successful..."
-
-            if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
-                die "Somehow, importing the key didn't work. Make sure that 'ssh-add -l | grep RSA | head -n1' returns an RSA key?"
-            else
-                echo "Found AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION. Proceeding with instance creation."
-            fi
+        if ! aws ec2 describe-key-pairs --key-name $AWS_KEY_NAME; then
+            die "Somehow, importing the key didn't work. Make sure that 'ssh-add -l | grep RSA | head -n1' returns an RSA key?"
         else
-            echo "Found key $AWS_KEY_NAME."
+            echo "Found AWS key named $AWS_KEY_NAME in region $AWS_DEFAULT_REGION. Proceeding with instance creation."
         fi
-    }
+    else
+        echo "Found key $AWS_KEY_NAME."
+    fi
+}
 
-    suggest_amis() {
-        suggested_ami=$(scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
-        echo "$suggested_ami"
-    }
+suggest_amis() {
+    suggested_ami=$(scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N)
+    echo "$suggested_ami"
+}
 
-    get_token() {
-        TOKEN=$(date +%Y-%m-%d-%H-%M-$USER)
-        echo $TOKEN
-    }
+get_token() {
+    TOKEN=$(date +%Y-%m-%d-%H-%M-$USER)
+    echo $TOKEN
+}
 
-    get_ami() {
-        # using find-ubuntu-ami script in `trainer-tools/scripts`:
-        #AMI=$(./scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | head -1 | awk '{print $7}')
-        #AMI=$(suggest_amis | grep -v ^REGION | head -1 | awk '{print $7}')
-        case $AWS_DEFAULT_REGION in
-        eu-central-1)
-          AMI=ami-74a4bc18
-          ;;
-        eu-west-1)
-          AMI=ami-cda312be
-          ;;
-        us-west-2)
-          AMI=ami-495bbd29
-          ;;
-        us-east-1)
-          AMI=ami-1711387d
-          ;;
-        esac
-        echo $AMI
-    }
-
-    get_instances_by_token() {
-        aws ec2 describe-instances --output table \
-                    --filter "Name=tag:Name,Values=$TOKEN" \
-                    --query "Reservations[*].Instances[*].[ \
-                        InstanceId, \
-                        State.Name, \
-                        Tags[0].Value, \
-                        PublicIpAddress, \
-                        InstanceType \
-                        ]"
-    }
-
-    get_instance_ips_by_tag() {
-        aws ec2 describe-instances \
-            --output text \
-            --filter "Name=tag:Name,Values=$1" \
-            --query "Reservations[*].Instances[*].PublicIpAddress" \
-                | tr "\t" "\n" \
-                | sort -n -t . -k 1,1 -k 2,2 -k 3,3 -k 4,4  # sort IPs
-        # JP: try [PublicIpAddress] to simplify a tiny bit
-            #--query [PublicIpAddress] \
-            # AJ: ? That doesn't work for me
-    }
-
-    get_instance_ids_by_tag() {
-        IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$1" | grep ^INSTANCE | awk '{print $8}')
-        echo "$IDS"
-    }
-
-    get_instance_ids_by_client_token() {
-        IDS=$(aws ec2 describe-instances --filters "Name=client-token,Values=$1" | grep ^INSTANCES | awk '{print $8}'
-    )
-        echo "$IDS"
-    }
-
-    list_tags() {
-        #tags=$(aws ec2 describe-tags \
-        #    --filters "Name=key,Values=Name" \
-        #    --query 'Tags[*].Value[]' \
-        #    --output json)
-        tags=$(aws ec2 describe-instances \
-            --query 'Reservations[].Instances[].Tags[?Key==`Name`].Value[]')
-
-        echo "" > tags.txt
-        for t in $tags; do
-            echo "$t" >> tags.txt
-        done
-        cat tags.txt
-    }
-
-    print_tags(){
-        # Print all "Name" tags in our region with their instance count
-        echo "[#] [Tag]" | awk '{ printf " %7s %12s \n", $1, $2}'
-        aws ec2 describe-instances \
-            --filter "Name=tag:Name,Values=[*]" \
-            --query "Reservations[*].Instances[*].[Tags[0].Value]" \
-            | awk '{ printf " %-13s %-10s\n", $1, $2}' \
-            | sort \
-            | uniq -c
-    }
+get_ami() {
+    # using find-ubuntu-ami script in `trainer-tools/scripts`:
+    #AMI=$(./scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | head -1 | awk '{print $7}')
+    #AMI=$(suggest_amis | grep -v ^REGION | head -1 | awk '{print $7}')
+    case $AWS_DEFAULT_REGION in
+    eu-central-1)
+      AMI=ami-74a4bc18
+      ;;
+    eu-west-1)
+      AMI=ami-cda312be
+      ;;
+    us-west-2)
+      AMI=ami-495bbd29
+      ;;
+    us-east-1)
+      AMI=ami-1711387d
+      ;;
+    esac
+    echo $AMI
+}
 
 
-    need_tag(){
-        TAG=$1
-        if [ -z "$TAG" ]; then
-            echo "Please specify a tag. Here's the list: "
-            print_tags
-            die
-        fi
-    }
+make_tag(){
+    # Generate cards for a given tag
+    TAG=$1
+    source settings.txt
+    IPS=$(aws_get_instance_ips_by_tag $TOKEN)
+    echo "$IPS" > tags/$TOKEN/ips.txt
+    python scripts/ips-txt-to-html.py
+    mv ips.html tags/$TAG/ips.html
+    ln -sf tags/$TAG/ips.html ips.html
+    link_tag $TAG
+    echo "Cards created. You may want to run:"
+    echo "chromium ips.html"
+}
 
-    make_tag(){
-        # Generate cards for a given tag
-        TAG=$1
-        source settings.txt
-        IPS=$(get_instance_ips_by_tag $TOKEN)
-        echo "$IPS" > tags/$TOKEN/ips.txt
-        python scripts/ips-txt-to-html.py
-        mv ips.html tags/$TAG/ips.html
-        ln -sf tags/$TAG/ips.html ips.html
-        tail ips.html
-        link_tag $TAG
-        echo "Cards created. You may want to run:"
-        echo "chromium ips.html"
-    }
+describe_tag() {
+    TOKEN=$1
+    need_tag $TOKEN
+    echo "============= Tag: $TOKEN ============="
 
-    describe_tag() {
-        TOKEN=$1
-        need_tag $TOKEN
-        echo "============= Tag: $TOKEN ============="
+    echo "Instances: "
 
-        echo "Instances: "
+    echo "[#] [Status]" | awk '{ printf " %7s %12s \n", $1, $2}'
 
-        echo "[#] [Status]" | awk '{ printf " %7s %12s \n", $1, $2}'
+    aws ec2 describe-instances \
+        --filter "Name=tag:Name,Values=[$TOKEN]" \
+        --query "Reservations[*].Instances[*].[State]" \
+        | awk '{ printf "% 13s\n", $2}' \
+        | sort \
+        | uniq -c
+}
 
-        aws ec2 describe-instances \
-            --filter "Name=tag:Name,Values=[$TOKEN]" \
-            --query "Reservations[*].Instances[*].[State]" \
-            | awk '{ printf "% 13s\n", $2}' \
-            | sort \
-            | uniq -c
-    }
+describe_workshop() {
 
-    describe_workshop() {
+    echo "======= Workshop: $WORKSHOP ======="
 
-        echo "======= Workshop: $WORKSHOP ======="
+    for item in \
+                WORKSHOP_SHORT_NAME \
+                WORKSHOP_NAME \
+                REPO_REMOTE \
+                CLUSTER_SIZE \
+                PAGE_SIZE \
+                SLIDES_URL \
+                SLIDES_COMMAND \
+                SLIDES_COMMAND_PATH \
+            ; do
+        echo "  $item: ${!item}"
+    done
+}
 
-        for item in \
-                    WORKSHOP_SHORT_NAME \
-                    WORKSHOP_NAME \
-                    REPO_REMOTE \
-                    CLUSTER_SIZE \
-                    PAGE_SIZE \
-                    SLIDES_URL \
-                    SLIDES_COMMAND \
-                    SLIDES_COMMAND_PATH \
-                ; do
-            echo "  $item: ${!item}"
-        done
-    }
 
-    kill_instances() {
-        IDS=$(get_instance_ids_by_tag $TOKEN)
-        if [ -z "$IDS" ]; then
-            die "Invalid tag."
-        else
-            echo "Deleting instances with tag $TOKEN."
-        fi
-
-        echo "$IDS" \
-            | xargs -r aws ec2 terminate-instances --instance-ids \
-            | grep ^TERMINATINGINSTANCES
-    }
-
-    check_envvars
-
+run_cli() {
     case "$1" in
     ami)
         # A wrapper for scripts/find-ubuntu-ami.sh
@@ -394,7 +239,7 @@ cd $SCRIPT_DIR
         scripts/find-ubuntu-ami.sh -r $AWS_DEFAULT_REGION $*
         echo
         echo "Protip:"
-        echo "./trainer ami -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | cut -d\" \" -f15"
+        echo "trainer ami -a amd64 -v 15.10 -t hvm:ebs -N | grep -v ^REGION | cut -d\" \" -f15"
         echo
         echo "Suggestions:"
         suggest_amis
@@ -420,18 +265,18 @@ cd $SCRIPT_DIR
     ids)
         TOKEN=$2
         need_tag $TOKEN
-        IDS=$(get_instance_ids_by_tag $TOKEN)
+        IDS=$(aws_get_instance_ids_by_tag $TOKEN)
         echo "$IDS"
 
         # Just in case we managed to create instances but weren't able to tag them
         echo "Lookup by client token $TOKEN:"
-        IDS=$(get_instance_ids_by_client_token $TOKEN)
+        IDS=$(aws_get_instance_ids_by_client_token $TOKEN)
         echo "$IDS"
         ;;
     ips)
         TOKEN=$2
         need_tag $TOKEN
-        get_instance_ips_by_tag $TOKEN
+        aws_get_instance_ips_by_tag $TOKEN
         ;;
     list)
         # list existing instances in a given batch
@@ -439,21 +284,7 @@ cd $SCRIPT_DIR
         echo "Using region $AWS_DEFAULT_REGION."
         TOKEN=$2
         need_tag $TOKEN
-        result=$(get_instances_by_token $TOKEN)
-        if [[ -z $result ]]; then
-            echo "No instances found with tag $TOKEN in region $AWS_DEFAULT_REGION."
-        else
-            header={"ID State Tags IP Type" \
-                | awk '{ printf "%9s %12s %15s %20s %15s \n", \
-                $1, $2, $3, $4, $5}' # column -t -c 70}
-            echo "                      ====  $TOKEN  ===="
-            echo "$header"
-            echo "$result"
-        fi
-        # With column headers (but can't specify column order):
-        #aws ec2 describe-instances --output text \
-        #    --filter "Name=tag:Name,Values=2016-03-03-18-48-aj" \
-        #    --query "Reservations[*].Instances[*].{PublicIpAddress:PublicIpAddress,State:State}" 
+        aws_display_instances_by_tag $TOKEN
         ;;
     opensg)
         ec2-authorize -P tcp -p -1 default
@@ -498,10 +329,8 @@ cd $SCRIPT_DIR
         # Create $2 instances for workshop $3
         COUNT=$2
 
-        if [ -z "$COUNT" ]
-        then
-            echo "Indicate number of instances to start."
-            exit 1
+        if [ -z "$COUNT" ]; then
+            die "Indicate number of instances to start."
         fi
 
         greet       # Print our AWS username, to ease the pain of credential-juggling
@@ -528,7 +357,7 @@ cd $SCRIPT_DIR
         echo "---------------------------"
 
         # if instance creation succeeded, we should have some IDs
-        IDS=$(get_instance_ids_by_client_token $TOKEN)
+        IDS=$(aws_get_instance_ids_by_client_token $TOKEN)
         if [ -z "$IDS" ]; then
             die "Instance creation failed."
         fi
@@ -555,8 +384,8 @@ cd $SCRIPT_DIR
         echo "[--------------------------------------------------------------------------------------------]"
         tput sgr0
 
-        mkdir tags/$TOKEN
-        IPS=$(get_instance_ips_by_tag $TOKEN)
+        mkdir -p tags/$TOKEN
+        IPS=$(aws_get_instance_ips_by_tag $TOKEN)
         echo "$IPS" > tags/$TOKEN/ips.txt
         ln -s tags/$TOKEN/ips.txt ips.txt
         ;;
@@ -574,47 +403,61 @@ cd $SCRIPT_DIR
         describe_workshop $WORKSHOP
         ;;
     stop)
-        TOKEN=$2
-        need_tag $TOKEN
-        kill_instances $TOKEN
+        TAG=$2
+        need_tag $TAG
+        aws_kill_instances_by_tag $TAG
         ;;
     tags)
-        print_tags
+        aws_display_tags
         ;;
     test)
-        TOKEN=$2
-        need_tag $TOKEN
-        test_tag $TOKEN
+        TAG=$2
+        need_tag $TAG
+        test_tag $TAG
         ;;
     tokens)
-        aws ec2 describe-instances --output text \
-                --query 'Reservations[*].Instances[*].[ClientToken]' \
-            | sort -u
+        aws_display_tokens
         ;;
     *)
         echo "$0 COMMAND [n-instances|token|workshop|...]
     Commands:
+
+    General:
         ami                 Look up Amazon Machine Images
-        aws                 Wrapper for AWS CLI
+        aws                 Pass arbitrary commands to AWS CLI
+        limits              Print AWS max-instances
+        opensg              Modify AWS security groups
+        regions             Print list of AWS regions
+        scrape-slides PATH  Attempt to extract commands from slides
+
+    Container commands:
         env                 Print this container's environment variables
+        run     CMD         Run a command in the container
+        shell               Get a shell in the trainer container
+
+        list    [TAG]       If a tag is provided, list its VMs. Otherwise, list tags.
+        tags                List all tags (per-region)
+        tokens              List all client tokens (per-region; will usually be the same as tags)
+
+    Tag-specific commands:
+        start   n           Start n instances
         deploy  TAG         Deploy all instances with a given tag
         ips     TAG         List all IPs of instances with a given tag
         ids     TAG         List all instance IDs with a given tag
-        limits              Print AWS max-instances
-        list    [TAG]       If a tag is provided, list its VMs. Otherwise, list tags.
-        opensg              Modify AWS security groups
         pssh    TAG         Execute a command via parallel-ssh on this tag's VMs
         pull-images TAG     Pre-pull docker images. Run only after deploying.
-        regions             Print list of AWS regions
-        run     CMD         Run a command in the container
-        scrape-slides PATH  Attempt to extract commands from slides
-        shell               Get a shell in the trainer container
-        start   n           Start n instances
         status  TAG         Print information about this tag and its VMs
         stop    TAG         Stop and delete instances tagged TAG
-        tags                List all tags (per-region)
-        tokens              List all client tokens (per-region; will usually be the same as tags)"
+        "
         ;;
     esac
+}
 
+(
+    source scripts/cli.sh
+    source scripts/aws.sh
+    source scripts/rc
+    source scripts/colors.sh
+    cd $SCRIPT_DIR
+    run_cli "$@"
 )
