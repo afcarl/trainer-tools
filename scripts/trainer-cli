@@ -21,8 +21,8 @@ deploy_tag(){
     ips_file=ips.txt
 
     # wait until we can at least run a simple command on the host via SSH before trying to deploy
-    echo -n "Waiting for initial contact."
     ip=$(tail -1 ips.txt)
+    echo -n "Waiting for initial contact with $ip."
     ack="\ $ip reporting for duty."
 
     tput setaf 7
@@ -387,7 +387,7 @@ run_cli() {
         mkdir -p tags/$TOKEN
         IPS=$(aws_get_instance_ips_by_tag $TOKEN)
         echo "$IPS" > tags/$TOKEN/ips.txt
-        ln -s tags/$TOKEN/ips.txt ips.txt
+        ln -sf tags/$TOKEN/ips.txt ips.txt
         ;;
     status)
         TOKEN=$2
