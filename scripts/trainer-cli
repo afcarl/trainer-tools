@@ -18,6 +18,8 @@ greet() {
 deploy_tag(){
     TAG=$1
     need_tag $TAG
+    IPS_FILE=tags/$TAG/ips.txt
+    need_ips_file $IPS_FILE
     count=$(cat $IPS_FILE | wc -l)
     echo "Reading $count IPs from $IPS_FILE"
     link_tag $TAG
