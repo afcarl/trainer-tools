@@ -4,7 +4,7 @@ This repo should be added as a submodule in the repo of the Docker workshop:
 
   $ git submodule add https://github.com/soulshake/trainer-tools.git
 
-Then, update the `settings.yaml` if needed.
+Then, update the `settings.yaml` as needed.
 
 Summary of steps to launch a batch of instances for a workshop:
 
@@ -13,6 +13,14 @@ Summary of steps to launch a batch of instances for a workshop:
 * `trainer deploy TAG` to run `scripts/postprep.rc` via parallel-ssh
 * `trainer pull-images TAG` to pre-pull a bunch of Docker images 
 * `trainer cards TAG` to generate an HTML file you can print to PDF
+
+The `trainer` script can be executed directly.
+
+It will check for the necessary environment variables. Then, if all its dependencies are installed
+locally, it will execute `trainer-cli`. If not, it will look for a local Docker image
+tagged `soulshake/trainer-tools`. If found, it will run in a container. If not found,
+the user will be prompted to either install the missing dependencies or download
+the Docker image.
 
 ### Requirements
 
