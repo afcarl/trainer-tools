@@ -72,15 +72,15 @@ The `postprep.rc` file will be copied via parallel-ssh to all of the VMs and exe
 
 ### Pre-pull images
 
-    # trainer pull-images TAG
+    $ trainer pull-images TAG
 
 ### Generate cards
 
-    # trainer cards TAG
+    $ trainer cards TAG
 
 ### List tags
 
-    # ./trainer list
+    $ ./trainer list
 
 ### List VMs
 
