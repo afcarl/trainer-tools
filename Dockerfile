@@ -13,6 +13,7 @@ RUN apt-get install -y \
     wkhtmltopdf
 
 RUN pip install termcolor
+RUN pip install PyYAML
 
 #RUN pip install -U docker-compose
 #COPY . /trainer-tools

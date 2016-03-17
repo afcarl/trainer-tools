@@ -1,0 +1,35 @@
+# This file can be sourced directly in order to directly run commands on 
+# a batch of VMs whose IPs are located in ips.txt of the directly in which
+# the command is run.
+
+pssh () {
+    HOSTFILE="ips.txt"
+
+    [ -f $HOSTFILE ] || {
+        echo "No hostfile found at $HOSTFILE"
+        return
+    }
+
+    echo "[parallel-ssh] $@"
+
+    parallel-ssh -h $HOSTFILE -l ubuntu \
+    -O UserKnownHostsFile=/dev/null -O StrictHostKeyChecking=no \
+    -O ForwardAgent=yes \
+    "$@"
+}
+
+
+pcopykey () {
+    echo "Copying our key to ubuntu/.ssh/authorized_keys"
+    ssh-add -L | pssh --askpass --send-input \
+            "mkdir -p /home/ubuntu/.ssh; tee /home/ubuntu/.ssh/authorized_keys"
+
+    echo "Copying our key to docker/.ssh/authorized_keys"
+    ssh-add -L | pssh --askpass --send-input \
+            "mkdir -p /home/docker/.ssh; tee /home/docker/.ssh/authorized_keys"
+
+    echo "Copying our key to /root/.ssh/authorized_keys"
+    ssh-add -L | pssh --send-input \
+        "sudo mkdir -p /root/.ssh; sudo tee /root/.ssh/authorized_keys"
+}
+

@@ -16,14 +16,16 @@ greet() {
 }
 
 deploy_tag(){
-    TOKEN=$1
-    need_tag $TOKEN
-    ips_file=ips.txt
+    TAG=$1
+    need_tag $TAG
+    count=$(cat $IPS_FILE | wc -l)
+    echo "Reading $count IPs from $IPS_FILE"
+    link_tag $TAG
 
     # wait until we can at least run a simple command on the host via SSH before trying to deploy
-    ip=$(tail -1 ips.txt)
-    echo -n "Waiting for initial contact with $ip."
-    ack="\ $ip reporting for duty."
+    ip=$(tail -1 $IPS_FILE)
+    echo -n "Waiting for initial contact with $ip..."
+    ack="\ Reporting for duty."
 
     tput setaf 7
     while ! ssh -q -o "StrictHostKeyChecking=no" ubuntu@$ip "echo $ack"; do
@@ -32,19 +34,26 @@ deploy_tag(){
     done
     tput sgr0
 
-    yellow "[[ Deploying tag $(tput bold)$TOKEN ]]$(tput sgr0)"
-    source scripts/postprep.rc $ips_file
-    echo && tput setaf 2 && bold "Finished deploying $TOKEN" && tput sgr0
+    yellow "[[ Deploying tag $(tput bold)$TAG ]]$(tput sgr0)"
+    source scripts/postprep.rc
+    echo && tput setaf 2 && bold "Finished deploying $TAG" && tput sgr0
     echo "You may want to run one of the following commands:"
-    echo "trainer pull-images $TOKEN"
-    echo "trainer cards $TOKEN"
+    echo "trainer pull-images $TAG"
+    echo "trainer cards $TAG"
 }
 
+link_tag() {
+    TAG=$1
+    need_tag $TAG
+    IPS_FILE=tags/$TAG/ips.txt
+    need_ips_file $IPS_FILE
+    ln -sf $IPS_FILE ips.txt
+}
 
 pull_tag(){
-    TOKEN=$1
-    need_tag $TOKEN
-    link_tag $TOKEN
+    TAG=$1
+    need_tag $TAG
+    link_tag $TAG
     cards_file=ips.html
     if [ ! -s $IPS_FILE ]; then
         echo "Nonexistent or empty IPs file $IPS_FILE"
@@ -65,20 +74,20 @@ pull_tag(){
 
     #pssh --timeout 600 --send-input "bash /tmp/postprep-pull.rc >>/tmp/pp.out 2>>/tmp/pp.err" < $ips_file
 
-    echo && tput setaf 2 && bold "Finished pulling images for $TOKEN" && tput sgr0
+    echo && tput setaf 2 && bold "Finished pulling images for $TAG" && tput sgr0
 
     echo "You may now want to run:"
-    echo "trainer cards $TOKEN > $TOKEN-cards.html"
+    echo "trainer cards $TAG > $TAG-cards.html"
 }
 
 test_tag(){
-    ips_file=tags/$TOKEN/ips.txt
-    yellow "Using random IP in $ips_file to run tests on $TOKEN"
+    ips_file=tags/$TAG/ips.txt
+    yellow "Using random IP in $ips_file to run tests on $TAG"
     ip=$(shuf -n 1 $ips_file)
     test_vm $ip
     echo "Tests complete. You may want to run one of the following commands:"
-    echo "trainer stop $TOKEN"
-    echo "trainer cards $TOKEN"
+    echo "trainer stop $TAG"
+    echo "trainer cards $TAG"
 }
 
 test_vm() {
@@ -184,28 +193,33 @@ get_ami() {
 make_tag(){
     # Generate cards for a given tag
     TAG=$1
-    source settings.txt
-    IPS=$(aws_get_instance_ips_by_tag $TOKEN)
-    echo "$IPS" > tags/$TOKEN/ips.txt
-    python scripts/ips-txt-to-html.py
-    mv ips.html tags/$TAG/ips.html
-    ln -sf tags/$TAG/ips.html ips.html
-    link_tag $TAG
+    IPS=$(aws_get_instance_ips_by_tag $TAG)
+    if [ -e ips.html ]; then
+        rm ips.html
+    fi
+    echo "$IPS" > tags/$TAG/ips.txt
+    python scripts/ips-txt-to-html.py settings.txt
+    if [ -e tags/$TAG/ips.html ]; then
+        rm tags/$TAG/ips.html
+    fi
+    mv ips.html tags/$TAG/
+    ln -s tags/$TAG/ips.html ips.html
+    #mv ips.html tags/$TAG/ips.html
+    #ln -sf tags/$TAG/ips.html ips.html
     echo "Cards created. You may want to run:"
     echo "chromium ips.html"
 }
 
 describe_tag() {
-    TOKEN=$1
-    need_tag $TOKEN
-    echo "============= Tag: $TOKEN ============="
+    TAG=$1
+    need_tag $TAG
+    echo "============= Tag: $TAG ============="
 
     echo "Instances: "
-
     echo "[#] [Status]" | awk '{ printf " %7s %12s \n", $1, $2}'
 
     aws ec2 describe-instances \
-        --filter "Name=tag:Name,Values=[$TOKEN]" \
+        --filter "Name=tag:Name,Values=[$TAG]" \
         --query "Reservations[*].Instances[*].[State]" \
         | awk '{ printf "% 13s\n", $2}' \
         | sort \
@@ -249,42 +263,42 @@ run_cli() {
         "$@"
         ;;
     cards)
-        TOKEN=$2
-        need_tag $TOKEN
-        make_tag $TOKEN
+        TAG=$2
+        need_tag $TAG
+        make_tag $TAG
         ;;
     deploy)
         # TODO: increase parallelism
-        TOKEN=$2
-        need_tag $TOKEN
-        deploy_tag $TOKEN
+        TAG=$2
+        need_tag $TAG
+        deploy_tag $TAG
         ;;
     env)
         env  # Print this container's environment variables
         ;;
     ids)
-        TOKEN=$2
-        need_tag $TOKEN
-        IDS=$(aws_get_instance_ids_by_tag $TOKEN)
+        TAG=$2
+        need_tag $TAG
+        IDS=$(aws_get_instance_ids_by_tag $TAG)
         echo "$IDS"
 
         # Just in case we managed to create instances but weren't able to tag them
-        echo "Lookup by client token $TOKEN:"
-        IDS=$(aws_get_instance_ids_by_client_token $TOKEN)
+        echo "Lookup by client token $TAG:"
+        IDS=$(aws_get_instance_ids_by_client_token $TAG)
         echo "$IDS"
         ;;
     ips)
-        TOKEN=$2
-        need_tag $TOKEN
-        aws_get_instance_ips_by_tag $TOKEN
+        TAG=$2
+        need_tag $TAG
+        aws_get_instance_ips_by_tag $TAG
         ;;
     list)
         # list existing instances in a given batch
         # to list batches, see "tags" command
         echo "Using region $AWS_DEFAULT_REGION."
-        TOKEN=$2
-        need_tag $TOKEN
-        aws_display_instances_by_tag $TOKEN
+        TAG=$2
+        need_tag $TAG
+        aws_display_instances_by_tag $TAG
         ;;
     opensg)
         ec2-authorize -P tcp -p -1 default
@@ -297,9 +311,9 @@ run_cli() {
         pssh --inline "$@"
         ;;
     pull-images)
-        TOKEN=$2
-        need_tag $TOKEN
-        pull_tag $TOKEN
+        TAG=$2
+        need_tag $TAG
+        pull_tag $TAG
         ;;
     regions)
         # Print list of AWS EC2 regions, highlighting ours ($AWS_DEFAULT_REGION) in the list
@@ -341,9 +355,10 @@ run_cli() {
         tput bold && tput setaf 5
         echo "---------------------------"
         echo "Starting $2 instances:"
-        echo "  Region: $AWS_DEFAULT_REGION"
-        echo "  Tag: $TOKEN"
-        echo "  AMI: $AMI"
+        echo "      Region: $AWS_DEFAULT_REGION"
+        echo "       Token: $TOKEN"
+        echo "To be tagged: $TOKEN"
+        echo "         AMI: $AMI"
         echo "---------------------------"
         tput sgr0
 
@@ -364,6 +379,10 @@ run_cli() {
 
         # Tag these new instances with a tag that is the same as the token
         aws ec2 create-tags --tag Key=Name,Value=$TOKEN --resources $IDS >> /dev/null
+        TAG=$TOKEN
+        unset TOKEN
+        # todo: Run instances and create tags in same command?
+        # aws ec2 create-tags --resources `aws ec2 run-instances [...] | jq -r ".Instances[0].InstanceId"` --tags "Key=Name,Value=..."
 
         echo "[------------------------------ Waiting for creation ----------------------------------]"
         # FIXME: instead of querying each instance to check if it has an association, make one call and make sure it has the right number
@@ -380,17 +399,17 @@ run_cli() {
 
         tput setaf 2
         echo "[--------------------------------------------------------------------------------------------]"
-        echo "        Successfully created $2 instances with tag: $(tput bold)$TOKEN $(tput sgr0)"
+        echo "        Successfully created $2 instances with tag: $(tput bold)$TAG $(tput sgr0)"
         echo "[--------------------------------------------------------------------------------------------]"
         tput sgr0
 
-        mkdir -p tags/$TOKEN
-        IPS=$(aws_get_instance_ips_by_tag $TOKEN)
-        echo "$IPS" > tags/$TOKEN/ips.txt
-        ln -sf tags/$TOKEN/ips.txt ips.txt
+        mkdir -p tags/$TAG
+        IPS=$(aws_get_instance_ips_by_tag $TAG)
+        echo "$IPS" > tags/$TAG/ips.txt
+        link_tag $TAG
         ;;
     status)
-        TOKEN=$2
+        TAG=$2
         greet
 
         echo "Region: $AWS_DEFAULT_REGION."

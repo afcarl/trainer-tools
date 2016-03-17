@@ -143,9 +143,10 @@ system("echo {}".format(duration))
 
 EOF
 
-IPS_FILE=$1
+IPS_FILE=ips.txt
 if [ ! -s $IPS_FILE ]; then
-    echo "Nonexistent or empty IPs file $IPS_FILE"
+    echo "ips.txt not found."
+    exit 1
 fi
 
 # then you test that by pssh'ing into a 5 node cluster to see what happens

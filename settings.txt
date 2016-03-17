@@ -1,0 +1,27 @@
+# This file is read by scripts/ips-txt-to-html.py
+
+name: Advanced Docker Orchestration
+short_name: orchestration
+repo: https://github.com/jpetazzo/orchestration-workshop
+
+clustersize: 3
+
+pagesize: 12  # Number of cards to print per page
+
+image: media/swarm.png  # To be placed in media/
+
+# To be printed on the cards:
+blurb: >
+    Here is the connection information to your very own 
+       cluster for this orchestration workshop. You can connect 
+       to each VM with any SSH client.
+
+       Your machines are:
+
+# {url} will be replaced by the script
+footer: >
+    <p>You can find the last version of the slides at: {url}.</p>
+
+url: http://container.training/
+command: None
+path: None
