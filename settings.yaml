@@ -1,7 +1,6 @@
 # This file is read by scripts/ips-txt-to-html.py
 
 name: Advanced Docker Orchestration
-short_name: orchestration
 repo: https://github.com/jpetazzo/orchestration-workshop
 
 clustersize: 3
@@ -23,5 +22,3 @@ footer: >
     <p>You can find the last version of the slides at: {url}.</p>
 
 url: http://container.training/
-command: None
-path: None
